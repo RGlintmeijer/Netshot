@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2019 Sylvain Cadilhac (NetFishers)
+ * Copyright 2013-2021 Sylvain Cadilhac (NetFishers)
  * 
  * This file is part of Netshot.
  * 
@@ -41,13 +41,16 @@ import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Value;
 import org.hibernate.annotations.NaturalId;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonView;
 
 import onl.netfishers.netshot.device.Device;
 import onl.netfishers.netshot.device.DeviceGroup;
 import onl.netfishers.netshot.device.attribute.AttributeDefinition.AttributeType;
+import onl.netfishers.netshot.rest.RestViews.DefaultView;
 
 /**
  * A diagnostic describes how to get some data from a group of devices, and to store
@@ -124,6 +127,7 @@ public abstract class Diagnostic {
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -135,11 +139,13 @@ public abstract class Diagnostic {
 	 */
 	@NaturalId(mutable = true)
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public String getName() {
 		return name;
 	}
 
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public AttributeType getResultType() {
 		return resultType;
 	}
@@ -151,6 +157,7 @@ public abstract class Diagnostic {
 	 */
 	@ManyToOne
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public DeviceGroup getTargetGroup() {
 		return targetGroup;
 	}
@@ -160,6 +167,7 @@ public abstract class Diagnostic {
 	 * @return true if it's enabled
 	 */
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public boolean isEnabled() {
 		return enabled;
 	}
@@ -245,7 +253,7 @@ public abstract class Diagnostic {
 	}
 
 	@Transient
-	abstract public Object getJsObject(Device device, Context context) throws ScriptException;
+	abstract public Value getJsObject(Device device, Context context) throws ScriptException;
 
 	@Override
 	public int hashCode() {

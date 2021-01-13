@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2016 Sylvain Cadilhac (NetFishers)
+ * Copyright 2013-2021 Sylvain Cadilhac (NetFishers)
  * 
  * This file is part of Netshot.
  * 
@@ -46,6 +46,7 @@ import ch.qos.logback.core.util.FileSize;
 import onl.netfishers.netshot.collector.SnmpTrapReceiver;
 import onl.netfishers.netshot.collector.SyslogServer;
 import onl.netfishers.netshot.device.DeviceDriver;
+import onl.netfishers.netshot.rest.RestService;
 
 /**
  * The Class Netshot. Starting point of Netshot

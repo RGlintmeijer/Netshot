@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2016 Sylvain Cadilhac (NetFishers)
+ * Copyright 2013-2021 Sylvain Cadilhac (NetFishers)
  * 
  * This file is part of Netshot.
  * 
@@ -16,14 +16,13 @@
  * You should have received a copy of the GNU General Public License
  * along with Netshot.  If not, see <http://www.gnu.org/licenses/>.
  */
-package onl.netfishers.netshot;
+package onl.netfishers.netshot.rest;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.UnknownHostException;
-import java.security.Principal;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,46 +41,39 @@ import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import javax.annotation.Priority;
 import javax.annotation.security.DenyAll;
 import javax.annotation.security.PermitAll;
 import javax.annotation.security.RolesAllowed;
-import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.DefaultValue;
-import javax.ws.rs.ForbiddenException;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
-import javax.ws.rs.Priorities;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.WebApplicationException;
-import javax.ws.rs.container.ContainerRequestContext;
-import javax.ws.rs.container.ContainerRequestFilter;
-import javax.ws.rs.container.ContainerResponseContext;
-import javax.ws.rs.container.ContainerResponseFilter;
-import javax.ws.rs.container.PreMatching;
 import javax.ws.rs.core.Context;
-import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.SecurityContext;
 import javax.ws.rs.core.UriBuilder;
-import javax.ws.rs.core.UriInfo;
-import javax.ws.rs.ext.ExceptionMapper;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlType;
 
+import onl.netfishers.netshot.Database;
+import onl.netfishers.netshot.Netshot;
+import onl.netfishers.netshot.TaskManager;
+import onl.netfishers.netshot.aaa.ApiToken;
 import onl.netfishers.netshot.aaa.Radius;
+import onl.netfishers.netshot.aaa.UiUser;
 import onl.netfishers.netshot.aaa.User;
 import onl.netfishers.netshot.compliance.CheckResult;
 import onl.netfishers.netshot.compliance.Exemption;
@@ -123,6 +115,7 @@ import onl.netfishers.netshot.diagnostic.Diagnostic;
 import onl.netfishers.netshot.diagnostic.DiagnosticResult;
 import onl.netfishers.netshot.diagnostic.JavaScriptDiagnostic;
 import onl.netfishers.netshot.diagnostic.SimpleDiagnostic;
+import onl.netfishers.netshot.rest.RestViews.DefaultView;
 import onl.netfishers.netshot.work.DebugLog;
 import onl.netfishers.netshot.work.Task;
 import onl.netfishers.netshot.work.TaskLogger;
@@ -163,12 +156,9 @@ import org.glassfish.grizzly.ssl.SSLContextConfigurator;
 import org.glassfish.grizzly.ssl.SSLEngineConfigurator;
 import org.glassfish.jersey.grizzly2.httpserver.GrizzlyHttpContainer;
 import org.glassfish.jersey.grizzly2.httpserver.GrizzlyHttpServerFactory;
-import org.glassfish.jersey.jackson.JacksonFeature;
-import org.glassfish.jersey.server.ResourceConfig;
-import org.glassfish.jersey.server.ServerProperties;
-import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
 import org.glassfish.jersey.servlet.ServletContainer;
 import org.glassfish.jersey.servlet.ServletProperties;
+import org.graalvm.polyglot.HostAccess.Export;
 import org.hibernate.Criteria;
 import org.hibernate.HibernateException;
 import org.hibernate.ObjectNotFoundException;
@@ -181,10 +171,13 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonView;
 
 import difflib.Delta;
 import difflib.DiffUtils;
 import difflib.Patch;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 
 /**
  * The RestService class exposes the Netshot methods as a REST service.
@@ -193,18 +186,23 @@ import difflib.Patch;
 @DenyAll
 public class RestService extends Thread {
 
-
-	/** The HQL select query for "light" devices, to be prepended to the actual query. */
+	/**
+	 * The HQL select query for "light" devices, to be prepended to the actual
+	 * query.
+	 */
 	private static final String DEVICELIST_BASEQUERY = "select d.id as id, d.name as name, d.family as family, d.mgmtAddress as mgmtAddress, d.status as status ";
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(RestService.class);
+	static Logger logger = LoggerFactory.getLogger(RestService.class);
 
 	/** The static instance service. */
 	private static RestService nsRestService;
-	
+
 	/** Pagination size for dump queries */
 	private static final int PAGINATION_SIZE = 1000;
+
+	private static final String HTTP_STATIC_PATH = Netshot.getConfig("netshot.http.staticpath", "/");
+	static final String HTTP_API_PATH = Netshot.getConfig("netshot.http.apipath", "/api");
 
 	/**
 	 * Initializes the service.
@@ -215,133 +213,20 @@ public class RestService extends Thread {
 		nsRestService.start();
 	}
 
-	@Priority(Priorities.AUTHORIZATION)
-	@PreMatching
-	private static class SecurityFilter implements ContainerRequestFilter {
+	private String httpBaseUrl;
+	private int httpBasePort;
+	private boolean httpUseSsl;
+	private String httpSslKeystoreFile;
+	private String httpSslKeystorePass;
 
-		@Context
-		private HttpServletRequest httpRequest;
-
-		@Inject
-		javax.inject.Provider<UriInfo> uriInfo;
-
-		@Override
-		public void filter(ContainerRequestContext requestContext) throws IOException {
-			User user = (User) httpRequest.getSession().getAttribute("user");
-			requestContext.setSecurityContext(new Authorizer(user));
-		}
-
-		private class Authorizer implements SecurityContext {
-
-			private User user;
-
-			public Authorizer(User user) {
-				this.user = user;
-			}
-
-			@Override
-			public boolean isUserInRole(String role) {
-				boolean result = (user != null &&
-						(("admin".equals(role) && user.getLevel() >= User.LEVEL_ADMIN) ||
-						("executereadwrite".equals(role) && user.getLevel() >= User.LEVEL_EXECUTEREADWRITE) ||
-						("readwrite".equals(role) && user.getLevel() >= User.LEVEL_READWRITE) ||
-						("readonly".equals(role) && user.getLevel() >= User.LEVEL_READONLY)));
-				Netshot.aaaLogger.debug("Role {} requested for user {}: result {}.", role, user == null ? "<null>" : user.getUsername(), result);
-				return result;
-			}
-
-			@Override
-			public boolean isSecure() {
-				return "https".equals(uriInfo.get().getRequestUri().getScheme());
-			}
-
-			@Override
-			public Principal getUserPrincipal() {
-				return user;
-			}
-
-			@Override
-			public String getAuthenticationScheme() {
-				return SecurityContext.FORM_AUTH;
-			}
-		}
-	}
-
-	private static class LoggerFilter implements ContainerResponseFilter {
-		@Context
-		private HttpServletRequest httpRequest;
-
-		@Override
-		public void filter(ContainerRequestContext requestContext, ContainerResponseContext responseContext)
-				throws IOException {
-			User user = null;
-			try {
-				user = (User)requestContext.getSecurityContext().getUserPrincipal();
-			}
-			catch (Exception e) {
-				//
-			}
-			String method = requestContext.getMethod().toUpperCase();
-			if ("GET".equals(method)) {
-				Netshot.aaaLogger.debug("Request from {} ({}) - {} - \"{} {}\" - {}.",
-						httpRequest.getRemoteAddr(),
-						requestContext.getHeaderString(HttpHeaders.USER_AGENT),
-						user == null ? "<none>" : user.getUsername(),
-						requestContext.getMethod(), requestContext.getUriInfo().getRequestUri(),
-						responseContext.getStatus());
-			}
-			else {
-				Netshot.aaaLogger.info("Request from {} ({}) - {} - \"{} {}\" - {}.",
-					httpRequest.getRemoteAddr(),
-					requestContext.getHeaderString(HttpHeaders.USER_AGENT),
-					user == null ? "<none>" : user.getUsername(),
-					requestContext.getMethod(), requestContext.getUriInfo().getRequestUri(),
-					responseContext.getStatus());
-			}
-		}
-	}
-	
-	public static class NetshotExceptionMapper implements ExceptionMapper<Throwable> {
-
-		public Response toResponse(Throwable t) {
-			if (!(t instanceof ForbiddenException)) {
-				if (t instanceof NetshotAuthenticationRequiredException) {
-					logger.info("Authentication required.", t);
-				}
-				else {
-					logger.error("Uncaught exception thrown by REST service", t);
-				}
-			}
-			if (t instanceof WebApplicationException) {
-				return ((WebApplicationException) t).getResponse();
-			}
-			else {
-				return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-						.build();
-			}
-		}
-	}
-
-	public static class NetshotWebApplication extends ResourceConfig {
-		public NetshotWebApplication() {
-			registerClasses(RestService.class, SecurityFilter.class);
-			register(NetshotExceptionMapper.class);
-			register(RolesAllowedDynamicFeature.class);
-			property(ServerProperties.RESPONSE_SET_STATUS_OVER_SEND_ERROR, "true");
-			property(ServerProperties.APPLICATION_NAME, "Netshot");
-			register(LoggerFilter.class);
-			//property(ServerProperties.TRACING, "ALL");
-			register(JacksonFeature.class);
-		}
-	}
+	@Context
+	private HttpServletRequest request;
 
 	/**
 	 * Instantiates a new Netshot REST service.
 	 */
 	public RestService() {
 		this.setName("REST Service");
-		httpStaticPath = Netshot.getConfig("netshot.http.staticpath", "/");
-		httpApiPath = Netshot.getConfig("netshot.http.apipath", "/api");
 		httpUseSsl = true;
 		if (Netshot.getConfig("netshot.http.ssl.enabled", "true").equals("false")) {
 			httpUseSsl = false;
@@ -367,13 +252,14 @@ public class RestService extends Thread {
 		}
 	}
 
-	private String httpStaticPath;
-	private String httpApiPath;
-	private String httpBaseUrl;
-	private boolean httpUseSsl;
-	private String httpSslKeystoreFile;
-	private String httpSslKeystorePass;
-	private int httpBasePort;
+	/**
+	 * Attach a suggested return code to the request, so the ResponseCodeFilter
+	 * can in turn change the return code of the response.
+	 * e.g. 201 or 204 instead of default 200
+	 */
+	private void suggestReturnCode(Response.Status status) {
+		this.request.setAttribute(ResponseCodeFilter.SUGGESTED_RESPONSE_CODE, status);
+	}
 
 	/* (non-Javadoc)
 	 * @see java.lang.Thread#run()
@@ -399,16 +285,16 @@ public class RestService extends Thread {
 			URI url = UriBuilder.fromUri(httpBaseUrl).port(httpBasePort).build();
 			HttpServer server = GrizzlyHttpServerFactory.createHttpServer(
 					url, (GrizzlyHttpContainer) null, httpUseSsl, sslConfig, false);
-			server.getServerConfiguration().setSessionTimeoutSeconds(User.MAX_IDLE_TIME);
+			server.getServerConfiguration().setSessionTimeoutSeconds(UiUser.MAX_IDLE_TIME);
 
-			WebappContext context = new WebappContext("GrizzlyContext", httpApiPath);
+			WebappContext context = new WebappContext("GrizzlyContext", HTTP_API_PATH);
 			ServletRegistration registration = context.addServlet("Jersey", ServletContainer.class);
 			registration.setInitParameter(ServletProperties.JAXRS_APPLICATION_CLASS,
 					NetshotWebApplication.class.getName());
-			registration.addMapping(httpApiPath);
+			registration.addMapping(HTTP_API_PATH);
 			context.deploy(server);
 			HttpHandler staticHandler = new CLStaticHttpHandler(Netshot.class.getClassLoader(), "/www/");
-			server.getServerConfiguration().addHttpHandler(staticHandler, httpStaticPath);
+			server.getServerConfiguration().addHttpHandler(staticHandler, HTTP_STATIC_PATH);
 
 			server.start();
 
@@ -464,6 +350,7 @@ public class RestService extends Thread {
 		 * @return the error message
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getErrorMsg() {
 			return errorMsg;
 		}
@@ -483,6 +370,7 @@ public class RestService extends Thread {
 		 * @return the error code
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getErrorCode() {
 			return errorCode;
 		}
@@ -498,203 +386,6 @@ public class RestService extends Thread {
 	}
 	
 	/**
-	 * The NetshotAuthenticationRequiredException class, which indicates that user authentication is required (401 error).
-	 */
-	static public class NetshotAuthenticationRequiredException extends WebApplicationException {
-		/** The Constant serialVersionUID. */
-		private static final long serialVersionUID = -2463854660543944995L;
-		
-		/**
-		 * Default constructor.
-		 */
-		public NetshotAuthenticationRequiredException() {
-			super(Response.status(Response.Status.UNAUTHORIZED).build());
-		}
-	}
-
-	/**
-	 * The NetshotBadRequestException class, a WebApplication exception
-	 * embedding an error message, to be sent to the REST client.
-	 */
-	static public class NetshotBadRequestException extends WebApplicationException {
-
-		/** The Constant NETSHOT_DATABASE_ACCESS_ERROR. */
-		public static final int NETSHOT_DATABASE_ACCESS_ERROR = 20;
-
-		/** The Constant NETSHOT_INVALID_IP_ADDRESS. */
-		public static final int NETSHOT_INVALID_IP_ADDRESS = 100;
-
-		/** The Constant NETSHOT_MALFORMED_IP_ADDRESS. */
-		public static final int NETSHOT_MALFORMED_IP_ADDRESS = 101;
-		
-		/** The Constant NETSHOT_INVALID_PORT. */
-		public static final int NETSHOT_INVALID_PORT = 102;
-
-		/** The Constant NETSHOT_INVALID_DOMAIN. */
-		public static final int NETSHOT_INVALID_DOMAIN = 110;
-
-		/** The Constant NETSHOT_DUPLICATE_DOMAIN. */
-		public static final int NETSHOT_DUPLICATE_DOMAIN = 111;
-
-		/** The Constant NETSHOT_INVALID_DOMAIN_NAME. */
-		public static final int NETSHOT_INVALID_DOMAIN_NAME = 112;
-
-		/** The Constant NETSHOT_USED_DOMAIN. */
-		public static final int NETSHOT_USED_DOMAIN = 113;
-
-		/** The Constant NETSHOT_INVALID_TASK. */
-		public static final int NETSHOT_INVALID_TASK = 120;
-
-		/** The Constant NETSHOT_TASK_NOT_CANCELLABLE. */
-		public static final int NETSHOT_TASK_NOT_CANCELLABLE = 121;
-
-		/** The Constant NETSHOT_TASK_CANCEL_ERROR. */
-		public static final int NETSHOT_TASK_CANCEL_ERROR = 122;
-
-		/** The Constant NETSHOT_USED_CREDENTIALS. */
-		public static final int NETSHOT_USED_CREDENTIALS = 130;
-
-		/** The Constant NETSHOT_DUPLICATE_CREDENTIALS. */
-		public static final int NETSHOT_DUPLICATE_CREDENTIALS = 131;
-
-		/** The Constant NETSHOT_INVALID_CREDENTIALS_TYPE. */
-		public static final int NETSHOT_INVALID_CREDENTIALS_TYPE = 132;
-
-		/** The Constant NETSHOT_CREDENTIALS_NOTFOUND. */
-		public static final int NETSHOT_CREDENTIALS_NOTFOUND = 133;
-		
-		/** The Constant NETSHOT_INVALID_CREDENTIALS_NAME. */
-		public static final int NETSHOT_INVALID_CREDENTIALS_NAME = 134;
-
-		/** The Constant NETSHOT_SCHEDULE_ERROR. */
-		public static final int NETSHOT_SCHEDULE_ERROR = 30;
-
-		/** The Constant NETSHOT_DUPLICATE_DEVICE. */
-		public static final int NETSHOT_DUPLICATE_DEVICE = 140;
-
-		/** The Constant NETSHOT_USED_DEVICE. */
-		public static final int NETSHOT_USED_DEVICE = 141;
-
-		/** The Constant NETSHOT_INVALID_DEVICE. */
-		public static final int NETSHOT_INVALID_DEVICE = 142;
-
-		/** The Constant NETSHOT_INVALID_CONFIG. */
-		public static final int NETSHOT_INVALID_CONFIG = 143;
-
-		/** The Constant NETSHOT_INCOMPATIBLE_CONFIGS. */
-		public static final int NETSHOT_INCOMPATIBLE_CONFIGS = 144;
-
-		/** The Constant NETSHOT_INVALID_DEVICE_CLASSNAME. */
-		public static final int NETSHOT_INVALID_DEVICE_CLASSNAME = 150;
-
-		/** The Constant NETSHOT_INVALID_SEARCH_STRING. */
-		public static final int NETSHOT_INVALID_SEARCH_STRING = 151;
-
-		/** The Constant NETSHOT_INVALID_GROUP_NAME. */
-		public static final int NETSHOT_INVALID_GROUP_NAME = 160;
-
-		/** The Constant NETSHOT_DUPLICATE_GROUP. */
-		public static final int NETSHOT_DUPLICATE_GROUP = 161;
-
-		/** The Constant NETSHOT_INCOMPATIBLE_GROUP_TYPE. */
-		public static final int NETSHOT_INCOMPATIBLE_GROUP_TYPE = 162;
-
-		/** The Constant NETSHOT_INVALID_DEVICE_IN_STATICGROUP. */
-		public static final int NETSHOT_INVALID_DEVICE_IN_STATICGROUP = 163;
-
-		/** The Constant NETSHOT_INVALID_GROUP. */
-		public static final int NETSHOT_INVALID_GROUP = 164;
-
-		/** The Constant NETSHOT_INVALID_DYNAMICGROUP_QUERY. */
-		public static final int NETSHOT_INVALID_DYNAMICGROUP_QUERY = 165;
-
-		/** The Constant NETSHOT_INVALID_SUBNET. */
-		public static final int NETSHOT_INVALID_SUBNET = 170;
-
-		/** The Constant NETSHOT_SCAN_SUBNET_TOO_BIG. */
-		public static final int NETSHOT_SCAN_SUBNET_TOO_BIG = 171;
-
-		/** The Constant NETSHOT_INVALID_POLICY_NAME. */
-		public static final int NETSHOT_INVALID_POLICY_NAME = 180;
-
-		/** The Constant NETSHOT_INVALID_POLICY. */
-		public static final int NETSHOT_INVALID_POLICY = 181;
-
-		/** The Constant NETSHOT_DUPLICATE_POLICY. */
-		public static final int NETSHOT_DUPLICATE_POLICY = 182;
-
-		/** The Constant NETSHOT_INVALID_RULE_NAME. */
-		public static final int NETSHOT_INVALID_RULE_NAME = 190;
-
-		/** The Constant NETSHOT_INVALID_RULE. */
-		public static final int NETSHOT_INVALID_RULE = 191;
-
-		/** The Constant NETSHOT_DUPLICATE_RULE. */
-		public static final int NETSHOT_DUPLICATE_RULE = 192;
-
-		/** The Constant NETSHOT_INVALID_USER. */
-		public static final int NETSHOT_INVALID_USER = 200;
-
-		/** The Constant NETSHOT_DUPLICATE_USER. */
-		public static final int NETSHOT_DUPLICATE_USER = 201;
-
-		/** The Constant NETSHOT_INVALID_USER_NAME. */
-		public static final int NETSHOT_INVALID_USER_NAME = 202;
-
-		/** The Constant NETSHOT_INVALID_PASSWORD. */
-		public static final int NETSHOT_INVALID_PASSWORD = 203;
-		
-		/** The Constant NETSHOT_INVALID_SCRIPT. */
-		public static final int NETSHOT_INVALID_SCRIPT = 220;
-		
-		/** The Constant NETSHOT_UNKNOWN_SCRIPT. */
-		public static final int NETSHOT_UNKNOWN_SCRIPT = 221;
-		
-		/** The Constant NETSHOT_DUPLICATE_SCRIPT. */
-		public static final int NETSHOT_DUPLICATE_SCRIPT = 222;
-
-		/** The Constant NETSHOT_INVALID_DIAGNOSTIC_NAME. */
-		public static final int NETSHOT_INVALID_DIAGNOSTIC_NAME = 230;
-
-		/** The Constant NETSHOT_DUPLICATE_DIAGNOSTIC. */
-		public static final int NETSHOT_DUPLICATE_DIAGNOSTIC = 231;
-
-		/** The Constant NETSHOT_INVALID_DIAGNOSTIC_TYPE. */
-		public static final int NETSHOT_INVALID_DIAGNOSTIC_TYPE = 232;
-
-		/** The Constant NETSHOT_INVALID_DIAGNOSTIC. */
-		public static final int NETSHOT_INVALID_DIAGNOSTIC = 233;
-
-		/** The Constant NETSHOT_INCOMPATIBLE_DIAGNOSTIC. */
-		public static final int NETSHOT_INCOMPATIBLE_DIAGNOSTIC = 234;
-
-		/** The Constant serialVersionUID. */
-		private static final long serialVersionUID = -4538169756895835186L;
-
-		/**
-		 * Instantiates a new netshot bad request exception.
-		 *
-		 * @param message the message
-		 * @param errorCode the error code
-		 */
-		public NetshotBadRequestException(String message, int errorCode) {
-			super(Response.status(Response.Status.BAD_REQUEST)
-					.entity(new RsErrorBean(message, errorCode)).build());
-		}
-	}
-	
-	static public class NetshotNotAuthorizedException extends WebApplicationException {
-
-		/** The Constant serialVersionUID. */
-		private static final long serialVersionUID = -453816975689585686L;
-
-		public NetshotNotAuthorizedException(String message, int errorCode) {
-			super(Response.status(Response.Status.FORBIDDEN)
-					.entity(new RsErrorBean(message, errorCode)).build());
-		}
-	}
-
-	/**
 	 * Gets the domains.
 	 *
 	 * @param request the request
@@ -702,9 +393,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("domains")
+	@Path("/domains")
+	@ApiResponse()
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the device domains",
+		description = "Returns the list of device domains."
+	)
 	public List<RsDomain> getDomains() throws WebApplicationException {
 		logger.debug("REST request, domains.");
 		Session session = Database.getSession();
@@ -720,7 +416,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the domains.", e);
 			throw new NetshotBadRequestException("Unable to fetch the domains",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -752,6 +448,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -771,6 +468,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -790,6 +488,7 @@ public class RestService extends Thread {
 		 * @return the description
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDescription() {
 			return description;
 		}
@@ -809,6 +508,7 @@ public class RestService extends Thread {
 		 * @return the ip address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -852,17 +552,21 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("domains")
+	@Path("/domains")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a device domain",
+		description = "Creates a device domain."
+	)
 	public RsDomain addDomain(RsDomain newDomain) throws WebApplicationException {
 		logger.debug("REST request, add a domain");
 		String name = newDomain.getName().trim();
 		if (name.isEmpty()) {
 			logger.warn("User posted an empty domain name.");
 			throw new NetshotBadRequestException("Invalid domain name.",
-					NetshotBadRequestException.NETSHOT_INVALID_DOMAIN_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN_NAME);
 		}
 		String description = newDomain.getDescription().trim();
 		try {
@@ -871,7 +575,7 @@ public class RestService extends Thread {
 			if (!v4Address.isNormalUnicast()) {
 				logger.warn("User posted an invalid IP address.");
 				throw new NetshotBadRequestException("Invalid IP address",
-						NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 			}
 			Domain domain = new Domain(name, description, v4Address, v6Address);
 			Session session = Database.getSession();
@@ -880,19 +584,20 @@ public class RestService extends Thread {
 				session.save(domain);
 				session.getTransaction().commit();
 				Netshot.aaaLogger.info("{} has been created.", domain);
+				this.suggestReturnCode(Response.Status.CREATED);
 			}
 			catch (HibernateException e) {
 				session.getTransaction().rollback();
 				logger.error("Error while adding a domain.", e);
 				Throwable t = e.getCause();
-				if (t != null && t.getMessage().contains("Duplicate entry")) {
+				if (t != null && t.getMessage().contains("uplicate")) {
 					throw new NetshotBadRequestException(
 							"A domain with this name already exists.",
-							NetshotBadRequestException.NETSHOT_DUPLICATE_DOMAIN);
+							NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DOMAIN);
 				}
 				throw new NetshotBadRequestException(
 						"Unable to add the domain to the database",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -902,7 +607,7 @@ public class RestService extends Thread {
 		catch (UnknownHostException e) {
 			logger.warn("User posted an invalid IP address.");
 			throw new NetshotBadRequestException("Malformed IP address",
-					NetshotBadRequestException.NETSHOT_MALFORMED_IP_ADDRESS);
+					NetshotBadRequestException.Reason.NETSHOT_MALFORMED_IP_ADDRESS);
 		}
 	}
 
@@ -916,10 +621,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("domains/{id}")
+	@Path("/domains/{id}")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a device domain",
+		description = "Edits a device domain, by ID."
+	)
 	public RsDomain setDomain(@PathParam("id") Long id, RsDomain rsDomain)
 			throws WebApplicationException {
 		logger.debug("REST request, edit domain {}.", id);
@@ -927,7 +636,7 @@ public class RestService extends Thread {
 		if (name.isEmpty()) {
 			logger.warn("User posted an invalid domain name.");
 			throw new NetshotBadRequestException("Invalid domain name.",
-					NetshotBadRequestException.NETSHOT_INVALID_DOMAIN_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN_NAME);
 		}
 		String description = rsDomain.getDescription().trim();
 		Network4Address v4Address;
@@ -936,13 +645,13 @@ public class RestService extends Thread {
 			if (!v4Address.isNormalUnicast()) {
 				logger.warn("User posted an invalid IP address");
 				throw new NetshotBadRequestException("Invalid IP address",
-						NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 			}
 		}
 		catch (UnknownHostException e) {
 			logger.warn("Invalid IP address.", e);
 			throw new NetshotBadRequestException("Malformed IP address",
-					NetshotBadRequestException.NETSHOT_MALFORMED_IP_ADDRESS);
+					NetshotBadRequestException.Reason.NETSHOT_MALFORMED_IP_ADDRESS);
 		}
 		Session session = Database.getSession();
 		Domain domain;
@@ -960,20 +669,20 @@ public class RestService extends Thread {
 			session.getTransaction().rollback();
 			logger.error("The domain doesn't exist.", e);
 			throw new NetshotBadRequestException("The domain doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while editing the domain.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A domain with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DOMAIN);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to save the domain... is the name already in use?",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -989,9 +698,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("domains/{id}")
+	@Path("/domains/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a device domain",
+		description = "Remove the given device domain, by ID."
+	)
 	public void deleteDomain(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete domain {}.", id);
@@ -1002,12 +715,13 @@ public class RestService extends Thread {
 			session.delete(domain);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted.", domain);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The domain doesn't exist.");
 			throw new NetshotBadRequestException("The domain doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
@@ -1015,10 +729,10 @@ public class RestService extends Thread {
 			if (t != null && t.getMessage().contains("foreign key constraint fails")) {
 				throw new NetshotBadRequestException(
 						"Unable to delete the domain, there must be devices or tasks using it.",
-						NetshotBadRequestException.NETSHOT_USED_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_USED_DOMAIN);
 			}
 			throw new NetshotBadRequestException("Unable to delete the domain",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1035,9 +749,13 @@ public class RestService extends Thread {
 	 */
 	@SuppressWarnings("deprecation")
 	@GET
-	@Path("devices/{id}/interfaces")
+	@Path("/devices/{id}/interfaces")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get device interfaces",
+		description = "Returns the list of interfaces of a given device (by ID)."
+	)
 	public List<NetworkInterface> getDeviceInterfaces(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, get device {} interfaces.", id);
@@ -1057,7 +775,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the interfaces.", e);
 			throw new NetshotBadRequestException("Unable to fetch the interfaces",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1073,9 +791,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}/modules")
+	@Path("/devices/{id}/modules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get device modules",
+		description = "Returns the list of hardware modules of a given device, by ID."
+	)
 	public List<Module> getDeviceModules(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, get device {} modules.", id);
@@ -1089,7 +811,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the modules.", e);
 			throw new NetshotBadRequestException("Unable to fetch the modules",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1105,9 +827,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}/tasks")
+	@Path("/devices/{id}/tasks")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get device tasks",
+		description = "Returns the list of tasks of a given device (by ID). Up to 'max' tasks are returned, sorted by status and significant date."
+	)
 	public List<Task> getDeviceTasks(@PathParam("id") Long id,
 			@PathParam("max") @DefaultValue("20") Integer maxCount)
 			throws WebApplicationException {
@@ -1183,7 +909,7 @@ public class RestService extends Thread {
 		catch (Exception e) {
 			logger.error("Unable to fetch the tasks.", e);
 			throw new NetshotBadRequestException("Unable to fetch the tasks",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1199,9 +925,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}/configs")
+	@Path("/devices/{id}/configs")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get device configs",
+		description = "Returns the list of configurations of the given device, by ID."
+	)
 	public List<Config> getDeviceConfigs(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, get device {} configs.", id);
@@ -1216,7 +946,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the configs.", e);
 			throw new NetshotBadRequestException("Unable to fetch the configs",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1224,7 +954,7 @@ public class RestService extends Thread {
 	}
 
 	/**
-	 * Gets the device config plain.
+	 * Gets the device config as plain text.
 	 *
 	 * @param request the request
 	 * @param id the id
@@ -1233,9 +963,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("configs/{id}/{item}")
+	@Path("/configs/{id}/{item}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_OCTET_STREAM })
+	@Operation(
+		summary = "Get a device configuration item",
+		description = "Retrieves a device configuration item, in plain text."
+	)
 	public Response getDeviceConfigPlain(@PathParam("id") Long id,
 			@PathParam("item") String item) throws WebApplicationException {
 		logger.debug("REST request, get device {} config {}.", id, item);
@@ -1340,6 +1074,7 @@ public class RestService extends Thread {
 		 * @return the original date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getOriginalDate() {
 			return originalDate;
 		}
@@ -1350,6 +1085,7 @@ public class RestService extends Thread {
 		 * @return the revised date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getRevisedDate() {
 			return revisedDate;
 		}
@@ -1360,6 +1096,7 @@ public class RestService extends Thread {
 		 * @return the deltas
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Map<String, List<RsConfigDelta>> getDeltas() {
 			return deltas;
 		}
@@ -1446,6 +1183,7 @@ public class RestService extends Thread {
 		 * @return the diff type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Type getDiffType() {
 			return diffType;
 		}
@@ -1456,6 +1194,7 @@ public class RestService extends Thread {
 		 * @return the original position
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getOriginalPosition() {
 			return originalPosition;
 		}
@@ -1466,6 +1205,7 @@ public class RestService extends Thread {
 		 * @return the revised position
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getRevisedPosition() {
 			return revisedPosition;
 		}
@@ -1476,6 +1216,7 @@ public class RestService extends Thread {
 		 * @return the original lines
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<String> getOriginalLines() {
 			return originalLines;
 		}
@@ -1486,6 +1227,7 @@ public class RestService extends Thread {
 		 * @return the revised lines
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<String> getRevisedLines() {
 			return revisedLines;
 		}
@@ -1496,6 +1238,7 @@ public class RestService extends Thread {
 		 * @return the item
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getItem() {
 			return item;
 		}
@@ -1506,6 +1249,7 @@ public class RestService extends Thread {
 		 * @return the pre context
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<String> getPreContext() {
 			return preContext;
 		}
@@ -1516,6 +1260,7 @@ public class RestService extends Thread {
 		 * @return the post context
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<String> getPostContext() {
 			return postContext;
 		}
@@ -1530,9 +1275,13 @@ public class RestService extends Thread {
 	 * @return the device config diff
 	 */
 	@GET
-	@Path("configs/{id1}/vs/{id2}")
+	@Path("/configs/{id1}/vs/{id2}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON })
+	@Operation(
+		summary = "Get the diff between two configuration objects",
+		description = "Retrieves the differences between two given device configuration objets, identified by full IDs."
+	)
 	public RsConfigDiff getDeviceConfigDiff(@PathParam("id1") Long id1,
 			@PathParam("id2") Long id2) {
 		logger.debug("REST request, get device config diff, id {} and {}.", id1,
@@ -1560,7 +1309,7 @@ public class RestService extends Thread {
 			if (config1 == null || config2 == null) {
 				logger.error("Non existing config, {} or {}.", id1, id2);
 				throw new NetshotBadRequestException("Unable to fetch the configs",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			DeviceDriver driver1;
 			DeviceDriver driver2;
@@ -1571,12 +1320,12 @@ public class RestService extends Thread {
 			catch (MissingDeviceDriverException e) {
 				logger.error("Missing driver.");
 				throw new NetshotBadRequestException("Missing driver",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			if (!driver1.equals(driver2)) {
 				logger.error("Incompatible configurations, {} and {} (different drivers).", id1, id2);
 				throw new NetshotBadRequestException("Incompatible configurations",
-						NetshotBadRequestException.NETSHOT_INCOMPATIBLE_CONFIGS);
+						NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_CONFIGS);
 			}
 			
 			configDiffs = new RsConfigDiff(config1.getChangeDate(),
@@ -1602,7 +1351,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the configs", e);
 			throw new NetshotBadRequestException("Unable to fetch the configs",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1618,9 +1367,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}")
+	@Path("/devices/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get a device",
+		description = "Retrieve a device will all details."
+	)
 	public Device getDevice(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, device {}.", id);
@@ -1633,7 +1386,7 @@ public class RestService extends Thread {
 				.uniqueResult();
 			if (device == null) {
 				throw new NetshotBadRequestException("Can't find this device",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			device.setMgmtDomain(Database.unproxy(device.getMgmtDomain()));
 			device.setEolModule(Database.unproxy(device.getEolModule()));
@@ -1650,7 +1403,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the device", e);
 			throw new NetshotBadRequestException("Unable to fetch the device",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1685,6 +1438,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -1704,6 +1458,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -1723,6 +1478,7 @@ public class RestService extends Thread {
 		 * @return the family
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -1742,6 +1498,7 @@ public class RestService extends Thread {
 		 * @return the mgmt address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Network4Address getMgmtAddress() {
 			return mgmtAddress;
 		}
@@ -1761,6 +1518,7 @@ public class RestService extends Thread {
 		 * @return the status
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Device.Status getStatus() {
 			return status;
 		}
@@ -1785,9 +1543,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices")
+	@Path("/devices")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the devices",
+		description = "Retrieves the device list with minimal details."
+	)
 	public List<RsLightDevice> getDevices() throws WebApplicationException {
 		logger.debug("REST request, devices.");
 		Session session = Database.getSession();
@@ -1801,7 +1563,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the devices", e);
 			throw new NetshotBadRequestException("Unable to fetch the devices",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1816,29 +1578,26 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devicetypes")
+	@Path("/devicetypes")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public List<DeviceDriver> getDeviceTypes() throws WebApplicationException {
+	@Operation(
+		summary = "Get the device types",
+		description = "Returns the list of device types (drivers)."
+	)
+	public List<DeviceDriver> getDeviceTypes(@DefaultValue("false") @QueryParam("refresh") boolean refresh) throws WebApplicationException {
 		logger.debug("REST request, device types.");
+		if (refresh) {
+			try {
+				DeviceDriver.refreshDrivers();
+			}
+			catch (Exception e) {
+				logger.error("Error in REST service while refreshing the device types.", e);
+			}
+		}
 		List<DeviceDriver> deviceTypes = new ArrayList<DeviceDriver>();
 		deviceTypes.addAll(DeviceDriver.getAllDrivers());
 		return deviceTypes;
-	}
-	
-	@GET
-	@Path("refresheddevicetypes")
-	@RolesAllowed("admin")
-	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public List<DeviceDriver> getDeviceTypesAndRefresh() throws WebApplicationException {
-		logger.debug("REST request, refresh and get device types.");
-		try {
-			DeviceDriver.refreshDrivers();
-		}
-		catch (Exception e) {
-			logger.error("Error in REST service while refreshing the device types.", e);
-		}
-		return this.getDeviceTypes();
 	}
 
 	/**
@@ -1855,6 +1614,7 @@ public class RestService extends Thread {
 		private String deviceFamily;
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -1869,6 +1629,7 @@ public class RestService extends Thread {
 		 * @return the device family
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDeviceFamily() {
 			return deviceFamily;
 		}
@@ -1891,9 +1652,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devicefamilies")
+	@Path("/devicefamilies")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the existing device families",
+		description = "Returns the list of device families (driver specific) currenly known in the database."
+	)
 	public List<RsDeviceFamily> getDeviceFamilies() throws WebApplicationException {
 		logger.debug("REST request, device families.");
 		Session session = Database.getSession();
@@ -1908,7 +1673,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Error while loading device families.", e);
 			throw new NetshotBadRequestException("Database error",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -1921,6 +1686,7 @@ public class RestService extends Thread {
 		private String partNumber;
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -1939,9 +1705,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("partnumbers")
+	@Path("/partnumbers")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the known part numbers",
+		description = "Returns the list of all known part numbers currently existing in the module table."
+	)
 	public List<RsPartNumber> getPartNumbers() throws WebApplicationException {
 		logger.debug("REST request, dpart numbers.");
 		Session session = Database.getSession();
@@ -1956,7 +1726,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Error while loading part numbers.", e);
 			throw new NetshotBadRequestException("Database error",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -2006,6 +1776,7 @@ public class RestService extends Thread {
 		 * @return true, if is auto discover
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isAutoDiscover() {
 			return autoDiscover;
 		}
@@ -2025,6 +1796,7 @@ public class RestService extends Thread {
 		 * @return the auto discovery task
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getAutoDiscoveryTask() {
 			return autoDiscoveryTask;
 		}
@@ -2044,6 +1816,7 @@ public class RestService extends Thread {
 		 * @return the ip address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -2063,6 +1836,7 @@ public class RestService extends Thread {
 		 * @return the domain id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDomainId() {
 			return domainId;
 		}
@@ -2082,6 +1856,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -2101,6 +1876,7 @@ public class RestService extends Thread {
 		 * @return the device type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDeviceType() {
 			return deviceType;
 		}
@@ -2120,6 +1896,7 @@ public class RestService extends Thread {
 		 * @return the connect IP address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getConnectIpAddress() {
 			return connectIpAddress;
 		}
@@ -2137,6 +1914,7 @@ public class RestService extends Thread {
 		 * @return the SSH port
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getSshPort() {
 			return sshPort;
 		}
@@ -2154,6 +1932,7 @@ public class RestService extends Thread {
 		 * @return the Telnet port
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getTelnetPort() {
 			return telnetPort;
 		}
@@ -2171,6 +1950,7 @@ public class RestService extends Thread {
 		 * @return the specific credential set
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public DeviceCredentialSet getSpecificCredentialSet() {
 			return specificCredentialSet;
 		}
@@ -2193,11 +1973,16 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("devices")
+	@Path("/devices")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public Task addDevice(@Context HttpServletRequest request, RsNewDevice device) throws WebApplicationException {
+	@Operation(
+		summary = "Add a device",
+		description = "In auto discovery mode, this will create a 'discover device' task, and the device will be create if the discovery is successful." +
+		" Otherwise, the device will be immediately created in the database, and a 'snapshot' task will be created."
+	)
+	public Task addDevice(RsNewDevice device) throws WebApplicationException {
 		logger.debug("REST request, new device.");
 		Network4Address deviceAddress;
 		try {
@@ -2205,13 +1990,13 @@ public class RestService extends Thread {
 			if (!deviceAddress.isNormalUnicast()) {
 				logger.warn("User posted an invalid IP address (not normal unicast).");
 				throw new NetshotBadRequestException("Invalid IP address",
-						NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 			}
 		}
 		catch (UnknownHostException e) {
 			logger.warn("User posted an invalid IP address.");
 			throw new NetshotBadRequestException("Malformed IP address",
-					NetshotBadRequestException.NETSHOT_MALFORMED_IP_ADDRESS);
+					NetshotBadRequestException.Reason.NETSHOT_MALFORMED_IP_ADDRESS);
 		}
 		Network4Address connectAddress = null;
 		if (device.getConnectIpAddress() != null && !device.getConnectIpAddress().equals("")) {
@@ -2220,13 +2005,13 @@ public class RestService extends Thread {
 				if (!deviceAddress.isNormalUnicast()) {
 					logger.warn("User posted an invalid connect IP address (not normal unicast).");
 					throw new NetshotBadRequestException("Invalid connect IP address",
-							NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 				}
 			}
 			catch (UnknownHostException e) {
 				logger.warn("User posted an invalid IP address.");
 				throw new NetshotBadRequestException("Malformed connect IP address",
-						NetshotBadRequestException.NETSHOT_MALFORMED_IP_ADDRESS);
+						NetshotBadRequestException.Reason.NETSHOT_MALFORMED_IP_ADDRESS);
 			}
 		}
 		Integer sshPort = null;
@@ -2240,7 +2025,7 @@ public class RestService extends Thread {
 			}
 			catch (Exception e) {
 				throw new NetshotBadRequestException("Invalid SSH port",
-						NetshotBadRequestException.NETSHOT_INVALID_PORT);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_PORT);
 			}
 		}
 		Integer telnetPort = null;
@@ -2254,7 +2039,7 @@ public class RestService extends Thread {
 			}
 			catch (Exception e) {
 				throw new NetshotBadRequestException("Invalid Telnet port",
-						NetshotBadRequestException.NETSHOT_INVALID_PORT);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_PORT);
 			}
 		}
 		Domain domain;
@@ -2271,7 +2056,7 @@ public class RestService extends Thread {
 				throw new NetshotBadRequestException(String.format(
 						"The device '%s' already exists with this IP address.",
 						duplicate.getName()),
-						NetshotBadRequestException.NETSHOT_DUPLICATE_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DEVICE);
 			}
 			domain = (Domain) session.load(Domain.class, device.getDomainId());
 			knownCommunities = session
@@ -2284,23 +2069,23 @@ public class RestService extends Thread {
 				logger.error("No available SNMP community");
 				throw new NetshotBadRequestException(
 						"There is no known SNMP community in the database to poll the device.",
-						NetshotBadRequestException.NETSHOT_CREDENTIALS_NOTFOUND);
+						NetshotBadRequestException.Reason.NETSHOT_CREDENTIALS_NOTFOUND);
 			}
 		}
 		catch (ObjectNotFoundException e) {
 			logger.error("Non existing domain.", e);
 			throw new NetshotBadRequestException("Invalid domain",
-					NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 		}
 		catch (HibernateException e) {
 			logger.error("Error while loading domain or communities.", e);
 			throw new NetshotBadRequestException("Database error",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
 		}
-		User user = (User) request.getSession().getAttribute("user");
+		User user = (User) request.getAttribute("user");
 		if (device.isAutoDiscover()) {
 			try {
 				DiscoverDeviceTypeTask task = new DiscoverDeviceTypeTask(deviceAddress, domain,
@@ -2312,17 +2097,18 @@ public class RestService extends Thread {
 				}
 				TaskManager.addTask(task);
 				Netshot.aaaLogger.info("{} has been added.", task);
+				this.suggestReturnCode(Response.Status.CREATED);
 				return task;
 			}
 			catch (SchedulerException e) {
 				logger.error("Unable to schedule the discovery task.", e);
 				throw new NetshotBadRequestException("Unable to schedule the task",
-						NetshotBadRequestException.NETSHOT_SCHEDULE_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_SCHEDULE_ERROR);
 			}
 			catch (HibernateException e) {
 				logger.error("Error while adding the discovery task.", e);
 				throw new NetshotBadRequestException("Database error",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 		}
 		else {
@@ -2330,7 +2116,7 @@ public class RestService extends Thread {
 			if (driver == null) {
 				logger.warn("Invalid posted device driver.");
 				throw new NetshotBadRequestException("Invalid device type.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE_CLASSNAME);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE_CLASSNAME);
 			}
 			session = Database.getSession();
 			TakeSnapshotTask task;
@@ -2364,7 +2150,7 @@ public class RestService extends Thread {
 				session.getTransaction().rollback();
 				logger.error("Error while creating the device", e);
 				throw new NetshotBadRequestException("Database error",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -2374,18 +2160,19 @@ public class RestService extends Thread {
 			}
 			try {
 				TaskManager.addTask(task);
+				this.suggestReturnCode(Response.Status.CREATED);
 				return task;
 			}
 			catch (HibernateException e) {
 				logger.error("Unable to add the task.", e);
 				throw new NetshotBadRequestException(
 						"Unable to add the task to the database.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			catch (SchedulerException e) {
 				logger.error("Unable to schedule the task.", e);
 				throw new NetshotBadRequestException("Unable to schedule the task.",
-						NetshotBadRequestException.NETSHOT_SCHEDULE_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_SCHEDULE_ERROR);
 			}
 		}
 
@@ -2399,9 +2186,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("devices/{id}")
+	@Path("/devices/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a device",
+		description = "Remove the given device, by ID."
+	)
 	public void deleteDevice(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete device {}.", id);
@@ -2432,6 +2223,7 @@ public class RestService extends Thread {
 					logger.error("Error while removing binary file {}", toDeleteFile, e);
 				}
 			}
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
@@ -2440,10 +2232,10 @@ public class RestService extends Thread {
 			if (t != null && t.getMessage().contains("foreign key constraint fails")) {
 				throw new NetshotBadRequestException(
 						"Unable to delete the device, there must be other objects using it.",
-						NetshotBadRequestException.NETSHOT_USED_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_USED_DEVICE);
 			}
 			throw new NetshotBadRequestException("Unable to delete the device",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (Exception e) {
 			logger.error("Error", e);
@@ -2500,6 +2292,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -2519,6 +2312,7 @@ public class RestService extends Thread {
 		 * @return the comments
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getComments() {
 			return comments;
 		}
@@ -2538,6 +2332,7 @@ public class RestService extends Thread {
 		 * @return the ip address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -2557,6 +2352,7 @@ public class RestService extends Thread {
 		 * @return true, if is auto try credentials
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isAutoTryCredentials() {
 			return autoTryCredentials;
 		}
@@ -2576,6 +2372,7 @@ public class RestService extends Thread {
 		 * @return the credential set ids
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<Long> getCredentialSetIds() {
 			return credentialSetIds;
 		}
@@ -2602,6 +2399,7 @@ public class RestService extends Thread {
 		 * @return true, if is enable
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isEnabled() {
 			return enabled;
 		}
@@ -2620,6 +2418,7 @@ public class RestService extends Thread {
 		 * @return the management domain
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getMgmtDomain() {
 			return mgmtDomain;
 		}
@@ -2637,6 +2436,7 @@ public class RestService extends Thread {
 		 * @return the list of credential sets
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<Long> getClearCredentialSetIds() {
 			return clearCredentialSetIds;
 		}
@@ -2654,6 +2454,7 @@ public class RestService extends Thread {
 		 * @return the connect IP address
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getConnectIpAddress() {
 			return connectIpAddress;
 		}
@@ -2671,6 +2472,7 @@ public class RestService extends Thread {
 		 * @return the SSH port
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getSshPort() {
 			return sshPort;
 		}
@@ -2688,6 +2490,7 @@ public class RestService extends Thread {
 		 * @return the Telnet port
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getTelnetPort() {
 			return telnetPort;
 		}
@@ -2706,6 +2509,7 @@ public class RestService extends Thread {
 		 * @return the specific credential set
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public DeviceCredentialSet getSpecificCredentialSet() {
 			return specificCredentialSet;
 		}
@@ -2729,11 +2533,15 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("devices/{id}")
+	@Path("/devices/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public Device setDevice(@Context HttpServletRequest request, @PathParam("id") Long id, RsDevice rsDevice)
+	@Operation(
+		summary = "Update a device",
+		description = "Edits a device, by ID."
+	)
+	public Device setDevice(@PathParam("id") Long id, RsDevice rsDevice)
 			throws WebApplicationException {
 		logger.debug("REST request, edit device {}.", id);
 		Device device;
@@ -2754,7 +2562,7 @@ public class RestService extends Thread {
 				if (!v4Address.isNormalUnicast()) {
 					session.getTransaction().rollback();
 					throw new NetshotBadRequestException("Invalid IP address",
-							NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 				}
 				device.setMgmtAddress(v4Address);
 			}
@@ -2767,7 +2575,7 @@ public class RestService extends Thread {
 					if (!v4ConnectAddress.isNormalUnicast() && !v4ConnectAddress.isLoopback()) {
 						session.getTransaction().rollback();
 						throw new NetshotBadRequestException("Invalid Connect IP address",
-								NetshotBadRequestException.NETSHOT_INVALID_IP_ADDRESS);
+								NetshotBadRequestException.Reason.NETSHOT_INVALID_IP_ADDRESS);
 					}
 					device.setConnectAddress(v4ConnectAddress);
 				}
@@ -2787,7 +2595,7 @@ public class RestService extends Thread {
 					catch (Exception e) {
 						session.getTransaction().rollback();
 						throw new NetshotBadRequestException("Invalid SSH port",
-								NetshotBadRequestException.NETSHOT_INVALID_PORT);
+								NetshotBadRequestException.Reason.NETSHOT_INVALID_PORT);
 					}
 				}
 			}
@@ -2806,7 +2614,7 @@ public class RestService extends Thread {
 					catch (Exception e) {
 						session.getTransaction().rollback();
 						throw new NetshotBadRequestException("Invalid Telnet port",
-								NetshotBadRequestException.NETSHOT_INVALID_PORT);
+								NetshotBadRequestException.Reason.NETSHOT_INVALID_PORT);
 					}
 				}
 			}
@@ -2888,29 +2696,29 @@ public class RestService extends Thread {
 			session.getTransaction().rollback();
 			logger.warn("User posted an invalid IP address.", e);
 			throw new NetshotBadRequestException("Malformed IP address",
-					NetshotBadRequestException.NETSHOT_MALFORMED_IP_ADDRESS);
+					NetshotBadRequestException.Reason.NETSHOT_MALFORMED_IP_ADDRESS);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The device doesn't exist.", e);
 			throw new NetshotBadRequestException("The device doesn't exist anymore.",
-					NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Cannot edit the device.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A device with this IP address already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DEVICE);
 			}
 			if (t != null && t.getMessage().contains("domain")) {
 				throw new NetshotBadRequestException("Unable to find the domain",
-						NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 			}
 			throw new NetshotBadRequestException("Unable to save the device.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -2927,9 +2735,13 @@ public class RestService extends Thread {
 	 * @return the task
 	 */
 	@GET
-	@Path("tasks/{id}")
+	@Path("/tasks/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get a task.",
+		description = "Retrieves the status of a given task, by ID."
+	)
 	public Task getTask(@PathParam("id") Long id) {
 		logger.debug("REST request, get task {}", id);
 		Session session = Database.getSession();
@@ -2941,12 +2753,12 @@ public class RestService extends Thread {
 		catch (ObjectNotFoundException e) {
 			logger.error("Unable to find the task {}.", id, e);
 			throw new NetshotBadRequestException("Task not found",
-					NetshotBadRequestException.NETSHOT_INVALID_TASK);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the task {}.", id, e);
 			throw new NetshotBadRequestException("Unable to fetch the task",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -2963,9 +2775,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("tasks/{id}/debuglog")
+	@Path("/tasks/{id}/debuglog")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_OCTET_STREAM })
+	@Operation(
+		summary = "Get the debug log of a task",
+		description = "Retrieves the full debug log of a given task, by ID."
+	)
 	public Response getTaskDebugLog(@PathParam("id") Long id) throws WebApplicationException {
 		logger.debug("REST request, get task {} debug log.", id);
 		Session session = Database.getSession();
@@ -3002,22 +2818,27 @@ public class RestService extends Thread {
 	 * @return the tasks
 	 */
 	@GET
-	@Path("tasks")
+	@Path("/tasks")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public List<Task> getTasks() {
+	@Operation(
+		summary = "Get the tasks",
+		description = "Returns the list of tasks. Up to 'max' tasks are returned."
+	)
+	public List<Task> getTasks(@PathParam("max") @DefaultValue("1000") Integer maxCount) {
 		logger.debug("REST request, get tasks.");
 		Session session = Database.getSession();
 		try {
 			List<Task> tasks = session
 				.createQuery("from Task t order by t.id desc", Task.class)
+				.setMaxResults(maxCount)
 				.list();
 			return tasks;
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the tasks.", e);
 			throw new NetshotBadRequestException("Unable to fetch the tasks",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3032,9 +2853,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("credentialsets")
+	@Path("/credentialsets")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the global credential sets",
+		description = "Returns the list of global credential sets (SSH, SNMP, etc. accounts) for authentication against the devices."
+	)
 	public List<DeviceCredentialSet> getCredentialSets()
 			throws WebApplicationException {
 		logger.debug("REST request, get credentials.");
@@ -3050,7 +2875,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the credentials.", e);
 			throw new NetshotBadRequestException("Unable to fetch the credentials",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3072,9 +2897,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("credentialsets/{id}")
+	@Path("/credentialsets/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a credential set",
+		description = "Removes the given credential set, by ID."
+	)
 	public void deleteCredentialSet(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete credentials {}", id);
@@ -3086,7 +2915,7 @@ public class RestService extends Thread {
 			if (credentialSet.isDeviceSpecific()) {
 				throw new NetshotBadRequestException(
 						"Can't delete a device-specific credential set.",
-						NetshotBadRequestException.NETSHOT_USED_CREDENTIALS);
+						NetshotBadRequestException.Reason.NETSHOT_USED_CREDENTIALS);
 			}
 			/* HACK! In JPA, this would require updating each task one by one... */
 			session
@@ -3096,6 +2925,7 @@ public class RestService extends Thread {
 			session.delete(credentialSet);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted.", credentialSet);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (Exception e) {
 			session.getTransaction().rollback();
@@ -3107,11 +2937,11 @@ public class RestService extends Thread {
 			if (t != null && t.getMessage().contains("foreign key constraint fails")) {
 				throw new NetshotBadRequestException(
 						"Unable to delete the credential set, there must be devices or tasks using it.",
-						NetshotBadRequestException.NETSHOT_USED_CREDENTIALS);
+						NetshotBadRequestException.Reason.NETSHOT_USED_CREDENTIALS);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to delete the credential set",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3127,17 +2957,21 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("credentialsets")
+	@Path("/credentialsets")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a credential set",
+		description = "Creates a credential set, which then can be used to authenticate against the devices."
+	)
 	public void addCredentialSet(DeviceCredentialSet credentialSet)
 			throws WebApplicationException {
 		logger.debug("REST request, add credentials.");
 		if (credentialSet.getName() == null || credentialSet.getName().trim().equals("")) {
 			logger.error("Invalid credential set name.");
 			throw new NetshotBadRequestException("Invalid name for the credential set",
-					NetshotBadRequestException.NETSHOT_INVALID_CREDENTIALS_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_CREDENTIALS_NAME);
 		}
 		Session session = Database.getSession();
 		try {
@@ -3149,23 +2983,24 @@ public class RestService extends Thread {
 			session.save(credentialSet);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created.", credentialSet);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			Throwable t = e.getCause();
 			logger.error("Can't add the credentials.", e);
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A credential set with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_CREDENTIALS);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_CREDENTIALS);
 			}
 			else if (t != null && t.getMessage().contains("mgmt_domain")) {
 				throw new NetshotBadRequestException(
 						"The domain doesn't exist.",
-						NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 			}
 			throw new NetshotBadRequestException("Unable to save the credential set",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3182,10 +3017,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("credentialsets/{id}")
+	@Path("/credentialsets/{id}")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a credential set",
+		description = "Edits a credential set, by ID."
+	)
 	public DeviceCredentialSet setCredentialSet(@PathParam("id") Long id,
 			DeviceCredentialSet rsCredentialSet) throws WebApplicationException {
 		logger.debug("REST request, edit credentials {}", id);
@@ -3199,13 +3038,13 @@ public class RestService extends Thread {
 				logger.error("Unable to find the credential set {}.", id);
 				throw new NetshotBadRequestException(
 						"Unable to find the credential set.",
-						NetshotBadRequestException.NETSHOT_CREDENTIALS_NOTFOUND);
+						NetshotBadRequestException.Reason.NETSHOT_CREDENTIALS_NOTFOUND);
 			}
 			if (!credentialSet.getClass().equals(rsCredentialSet.getClass())) {
 				logger.error("Wrong posted credential type for credential set {}.", id);
 				throw new NetshotBadRequestException(
 						"The posted credential type doesn't match the existing one.",
-						NetshotBadRequestException.NETSHOT_INVALID_CREDENTIALS_TYPE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_CREDENTIALS_TYPE);
 			}
 			if (rsCredentialSet.getMgmtDomain() == null) {
 				credentialSet.setMgmtDomain(null);
@@ -3250,18 +3089,18 @@ public class RestService extends Thread {
 			session.getTransaction().rollback();
 			Throwable t = e.getCause();
 			logger.error("Unable to save the credentials {}.", id, e);
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A credential set with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_CREDENTIALS);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_CREDENTIALS);
 			}
 			else if (t != null && t.getMessage().contains("mgmt_domain")) {
 				throw new NetshotBadRequestException(
 						"The domain doesn't exist.",
-						NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 			}
 			throw new NetshotBadRequestException("Unable to save the credential set",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (NetshotBadRequestException e) {
 			session.getTransaction().rollback();
@@ -3292,6 +3131,7 @@ public class RestService extends Thread {
 		 * @return the device class name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -3306,6 +3146,7 @@ public class RestService extends Thread {
 		 * @return the query
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3339,6 +3180,7 @@ public class RestService extends Thread {
 		 * @return the query
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3358,6 +3200,7 @@ public class RestService extends Thread {
 		 * @return the devices
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<RsLightDevice> getDevices() {
 			return devices;
 		}
@@ -3381,10 +3224,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("devices/search")
+	@Path("/devices/search")
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Search for devices",
+		description = "Find devices using a string-based query."
+	)
 	public RsSearchResults searchDevices(RsSearchCriteria criteria)
 			throws WebApplicationException {
 		logger.debug("REST request, search devices, query '{}', driver '{}'.",
@@ -3411,7 +3258,7 @@ public class RestService extends Thread {
 			catch (HibernateException e) {
 				logger.error("Error while searching for the devices.", e);
 				throw new NetshotBadRequestException("Unable to fetch the devices",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -3421,7 +3268,7 @@ public class RestService extends Thread {
 			logger.warn("User's query is invalid.", e);
 			throw new NetshotBadRequestException("Invalid search string. "
 					+ e.getMessage(),
-					NetshotBadRequestException.NETSHOT_INVALID_SEARCH_STRING);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SEARCH_STRING);
 		}
 	}
 
@@ -3434,10 +3281,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("groups")
+	@Path("/groups")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a device group",
+		description = "Creates a device group. A group can be either static (fixed list) or dynamic (query-based list)."
+	)
 	public DeviceGroup addGroup(DeviceGroup deviceGroup)
 			throws WebApplicationException {
 		logger.debug("REST request, add group.");
@@ -3445,7 +3296,7 @@ public class RestService extends Thread {
 		if (name.isEmpty()) {
 			logger.warn("User posted an empty group name.");
 			throw new NetshotBadRequestException("Invalid group name.",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP_NAME);
 		}
 		deviceGroup.setName(name);
 		deviceGroup.setId(0);
@@ -3455,19 +3306,20 @@ public class RestService extends Thread {
 			session.save(deviceGroup);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created.", deviceGroup);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new device group.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A group with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_GROUP);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_GROUP);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the group to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3483,9 +3335,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("groups")
+	@Path("/groups")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the device groups",
+		description = "Returns the list of device groups, including their definition."
+	)
 	public List<DeviceGroup> getGroups() throws WebApplicationException {
 		logger.debug("REST request, get groups.");
 		Session session = Database.getSession();
@@ -3497,7 +3353,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the groups.", e);
 			throw new NetshotBadRequestException("Unable to fetch the groups",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3512,9 +3368,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("groups/{id}")
+	@Path("/groups/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a device group",
+		description = "Removes a device group. This doesn't remove the devices themselves."
+	)
 	public void deleteGroup(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete group {}.", id);
@@ -3529,18 +3389,19 @@ public class RestService extends Thread {
 			session.delete(deviceGroup);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted.", deviceGroup);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The group {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The group doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the group {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the group",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3581,6 +3442,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -3607,6 +3469,7 @@ public class RestService extends Thread {
 		 * @return the type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -3626,6 +3489,7 @@ public class RestService extends Thread {
 		 * @return the static devices
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public List<Long> getStaticDevices() {
 			return staticDevices;
 		}
@@ -3645,6 +3509,7 @@ public class RestService extends Thread {
 		 * @return the device class name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -3659,6 +3524,7 @@ public class RestService extends Thread {
 		 * @return the query
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3673,6 +3539,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getFolder() {
 			return folder;
 		}
@@ -3682,6 +3549,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isHiddenFromReports() {
 			return hiddenFromReports;
 		}
@@ -3702,10 +3570,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("groups/{id}")
+	@Path("/groups/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a device group",
+		description = "Edits a device group, by ID."
+	)
 	public DeviceGroup setGroup(@PathParam("id") Long id, RsDeviceGroup rsGroup)
 			throws WebApplicationException {
 		logger.debug("REST request, edit group {}.", id);
@@ -3716,7 +3588,7 @@ public class RestService extends Thread {
 			if (group == null) {
 				logger.error("Unable to find the group {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this group.",
-						NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 			}
 			if (group instanceof StaticDeviceGroup) {
 				StaticDeviceGroup staticGroup = (StaticDeviceGroup) group;
@@ -3737,12 +3609,12 @@ public class RestService extends Thread {
 				catch (FinderParseException e) {
 					throw new NetshotBadRequestException(
 							"Invalid query for the group definition.",
-							NetshotBadRequestException.NETSHOT_INVALID_DYNAMICGROUP_QUERY);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DYNAMICGROUP_QUERY);
 				}
 			}
 			else {
 				throw new NetshotBadRequestException("Unknown group type.",
-						NetshotBadRequestException.NETSHOT_INCOMPATIBLE_GROUP_TYPE);
+						NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_GROUP_TYPE);
 			}
 			group.setFolder(rsGroup.getFolder());
 			group.setHiddenFromReports(rsGroup.isHiddenFromReports());
@@ -3756,13 +3628,13 @@ public class RestService extends Thread {
 			logger.error("Unable to find a device while editing group {}.", id, e);
 			throw new NetshotBadRequestException(
 					"Unable to find a device. Refresh and try again.",
-					NetshotBadRequestException.NETSHOT_INVALID_DEVICE_IN_STATICGROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE_IN_STATICGROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to save the group {}.", id, e);
 			throw new NetshotBadRequestException("Unable to save the group.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -3782,9 +3654,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/group/{id}")
+	@Path("/devices/group/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get members of a device group",
+		description = "Returns the list of devices which belong to the given group, by ID."
+	)
 	public List<RsLightDevice> getGroupDevices(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, get devices from group {}.", id);
@@ -3795,7 +3671,7 @@ public class RestService extends Thread {
 			if (group == null) {
 				logger.error("Unable to find the group {}.", id);
 				throw new NetshotBadRequestException("Can't find this group",
-						NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 			}
 			@SuppressWarnings("unchecked")
 			Query<RsLightDevice> query = session.createQuery(
@@ -3811,7 +3687,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the devices of group {}.", id, e);
 			throw new NetshotBadRequestException("Unable to fetch the devices",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -3886,6 +3762,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -3906,6 +3783,7 @@ public class RestService extends Thread {
 		 * @return true, if is cancelled
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isCancelled() {
 			return cancelled;
 		}
@@ -3925,6 +3803,7 @@ public class RestService extends Thread {
 		 * @return the type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -3944,6 +3823,7 @@ public class RestService extends Thread {
 		 * @return the group
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getGroup() {
 			return group;
 		}
@@ -3963,6 +3843,7 @@ public class RestService extends Thread {
 		 * @return the device
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getDevice() {
 			return device;
 		}
@@ -3982,6 +3863,7 @@ public class RestService extends Thread {
 		 * @return the subnets
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getSubnets() {
 			return subnets;
 		}
@@ -4001,6 +3883,7 @@ public class RestService extends Thread {
 		 * @return the schedule reference
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getScheduleReference() {
 			return scheduleReference;
 		}
@@ -4020,6 +3903,7 @@ public class RestService extends Thread {
 		 * @return the schedule type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Task.ScheduleType getScheduleType() {
 			return scheduleType;
 		}
@@ -4039,6 +3923,7 @@ public class RestService extends Thread {
 		 * @return the comments
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getComments() {
 			return comments;
 		}
@@ -4058,6 +3943,7 @@ public class RestService extends Thread {
 		 * @return the domain
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getDomain() {
 			return domain;
 		}
@@ -4095,6 +3981,7 @@ public class RestService extends Thread {
 		 * @return the limit to outofdate device hours
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getLimitToOutofdateDeviceHours() {
 			return limitToOutofdateDeviceHours;
 		}
@@ -4104,6 +3991,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getDaysToPurge() {
 			return daysToPurge;
 		}
@@ -4113,6 +4001,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -4122,6 +4011,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -4131,6 +4021,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getConfigDaysToPurge() {
 			return configDaysToPurge;
 		}
@@ -4140,6 +4031,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getConfigSizeToPurge() {
 			return configSizeToPurge;
 		}
@@ -4149,6 +4041,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getConfigKeepDays() {
 			return configKeepDays;
 		}
@@ -4158,6 +4051,7 @@ public class RestService extends Thread {
 		}
 		
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isDebugEnabled() {
 			return debugEnabled;
 		}
@@ -4167,6 +4061,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isDontRunDiagnostics() {
 			return dontRunDiagnostics;
 		}
@@ -4176,6 +4071,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isDontCheckCompliance() {
 			return dontCheckCompliance;
 		}
@@ -4196,10 +4092,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("tasks/{id}")
+	@Path("/tasks/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a task",
+		description = "Edits a task, by ID. Set 'cancel' property to true to cancel the task."
+	)
 	public Task setTask(@PathParam("id") Long id, RsTask rsTask)
 			throws WebApplicationException {
 		logger.debug("REST request, edit task {}.", id);
@@ -4211,7 +4111,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the task {}.", id, e);
 			throw new NetshotBadRequestException("Unable to fetch the task.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -4220,7 +4120,7 @@ public class RestService extends Thread {
 		if (task == null) {
 			logger.error("Unable to find the task {}.", id);
 			throw new NetshotBadRequestException("Unable to find the task.",
-					NetshotBadRequestException.NETSHOT_INVALID_TASK);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 		}
 
 		if (rsTask.isCancelled()) {
@@ -4229,7 +4129,7 @@ public class RestService extends Thread {
 						id);
 				throw new NetshotBadRequestException(
 						"The task isn't in 'SCHEDULED' state.",
-						NetshotBadRequestException.NETSHOT_TASK_NOT_CANCELLABLE);
+						NetshotBadRequestException.Reason.NETSHOT_TASK_NOT_CANCELLABLE);
 			}
 
 			try {
@@ -4239,7 +4139,7 @@ public class RestService extends Thread {
 			catch (Exception e) {
 				logger.error("Unable to cancel the task {}.", id, e);
 				throw new NetshotBadRequestException("Cannot cancel the task.",
-						NetshotBadRequestException.NETSHOT_TASK_CANCEL_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_TASK_CANCEL_ERROR);
 			}
 		}
 
@@ -4265,6 +4165,7 @@ public class RestService extends Thread {
 		 * @return the status
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getStatus() {
 			return status;
 		}
@@ -4284,6 +4185,7 @@ public class RestService extends Thread {
 		 * @return the day
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getDay() {
 			return day;
 		}
@@ -4307,10 +4209,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("tasks/search")
+	@Path("/tasks/search")
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Search for tasks",
+		description = "Retrieves a list of tasks based on passed criteria."
+	)
 	public List<Task> searchTasks(RsTaskCriteria criteria)
 			throws WebApplicationException {
 
@@ -4372,7 +4278,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Error while searching for tasks.", e);
 			throw new NetshotBadRequestException("Unable to fetch the tasks",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -4388,15 +4294,19 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("tasks")
+	@Path("/tasks")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a task",
+		description = "Creates a task and schedule it for execution."
+	)
 	public Task addTask(@Context HttpServletRequest request,
 			@Context SecurityContext securityContext,
 			RsTask rsTask) throws WebApplicationException {
 		logger.debug("REST request, add task.");
-		User user = (User) request.getSession().getAttribute("user");
+		User user = (User) request.getAttribute("user");
 		String userName = "";
 		try {
 			userName = user.getUsername();
@@ -4414,13 +4324,13 @@ public class RestService extends Thread {
 				if (device == null) {
 					logger.error("Unable to find the device {}.", rsTask.getDevice());
 					throw new NetshotBadRequestException("Unable to find the device.",
-							NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 				}
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the device.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4437,12 +4347,12 @@ public class RestService extends Thread {
 			if (driver == null) {
 				logger.error("Unknown device driver {}.", rsTask.getType());
 				throw new NetshotBadRequestException("Unknown device driver.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			if (rsTask.getScript() == null) {
 				logger.error("The script can't be empty.");
 				throw new NetshotBadRequestException("The script can't be empty.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			Device device;
 			Session session = Database.getSession();
@@ -4451,13 +4361,13 @@ public class RestService extends Thread {
 				if (device == null) {
 					logger.error("Unable to find the device {}.", rsTask.getDevice());
 					throw new NetshotBadRequestException("Unable to find the device.",
-							NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 				}
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the device.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4470,12 +4380,12 @@ public class RestService extends Thread {
 			if (driver == null) {
 				logger.error("Unknown device driver {}.", rsTask.getType());
 				throw new NetshotBadRequestException("Unknown device driver.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			if (rsTask.getScript() == null) {
 				logger.error("The script can't be empty.");
 				throw new NetshotBadRequestException("The script can't be empty.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			DeviceGroup group;
 			Session session = Database.getSession();
@@ -4484,14 +4394,14 @@ public class RestService extends Thread {
 				if (group == null) {
 					logger.error("Unable to find the group {}.", rsTask.getGroup());
 					throw new NetshotBadRequestException("Unable to find the group.",
-							NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 				}
 				task = new RunDeviceGroupScriptTask(group, rsTask.getScript(), driver, rsTask.getComments(), userName);
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the group.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4506,13 +4416,13 @@ public class RestService extends Thread {
 				if (device == null) {
 					logger.error("Unable to find the device {}.", rsTask.getDevice());
 					throw new NetshotBadRequestException("Unable to find the device.",
-							NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 				}
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the device.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4528,7 +4438,7 @@ public class RestService extends Thread {
 				if (group == null) {
 					logger.error("Unable to find the group {}.", rsTask.getGroup());
 					throw new NetshotBadRequestException("Unable to find the group.",
-							NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 				}
 				task = new TakeGroupSnapshotTask(group, rsTask.getComments(), userName,
 						rsTask.getLimitToOutofdateDeviceHours(), rsTask.isDontRunDiagnostics(),
@@ -4537,7 +4447,7 @@ public class RestService extends Thread {
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the group.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4552,14 +4462,14 @@ public class RestService extends Thread {
 				if (group == null) {
 					logger.error("Unable to find the group {}.", rsTask.getGroup());
 					throw new NetshotBadRequestException("Unable to find the group.",
-							NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 				}
 				task = new CheckGroupComplianceTask(group, rsTask.getComments(), userName);
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the group.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4574,14 +4484,14 @@ public class RestService extends Thread {
 				if (group == null) {
 					logger.error("Unable to find the group {}.", rsTask.getGroup());
 					throw new NetshotBadRequestException("Unable to find the group.",
-							NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 				}
 				task = new CheckGroupSoftwareTask(group, rsTask.getComments(), userName);
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the group.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4596,7 +4506,7 @@ public class RestService extends Thread {
 				if (group == null) {
 					logger.error("Unable to find the group {}.", rsTask.getGroup());
 					throw new NetshotBadRequestException("Unable to find the group.",
-							NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 				}
 				task = new RunGroupDiagnosticsTask(group, rsTask.getComments(), userName,
 					rsTask.isDontCheckCompliance());
@@ -4604,7 +4514,7 @@ public class RestService extends Thread {
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the group.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4620,7 +4530,7 @@ public class RestService extends Thread {
 				if (!matcher.find()) {
 					logger.warn("User posted an invalid subnet '{}'.", rsSubnet);
 					throw new NetshotBadRequestException(String.format("Invalid subnet '%s'.", rsSubnet),
-							NetshotBadRequestException.NETSHOT_INVALID_SUBNET);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_SUBNET);
 				}
 				Network4Address subnet;
 				try {
@@ -4634,25 +4544,25 @@ public class RestService extends Thread {
 				catch (Exception e) {
 					logger.warn("User posted an invalid subnet '{}'.", rsSubnet, e);
 					throw new NetshotBadRequestException(String.format("Invalid subnet '%s'.", rsSubnet),
-							NetshotBadRequestException.NETSHOT_INVALID_SUBNET);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_SUBNET);
 				}
 				if (subnet.getPrefixLength() < 22 || subnet.getPrefixLength() > 32) {
 					logger.warn("User posted an invalid prefix length {}.",
 							subnet.getPrefix());
 					throw new NetshotBadRequestException(String.format("Invalid prefix length for '%s'.", rsSubnet),
-							NetshotBadRequestException.NETSHOT_SCAN_SUBNET_TOO_BIG);
+							NetshotBadRequestException.Reason.NETSHOT_SCAN_SUBNET_TOO_BIG);
 				}
 			}
 			if (subnets.size() == 0) {
 				logger.warn("User posted an invalid subnet list '{}'.", rsTask.getSubnets());
 				throw new NetshotBadRequestException(String.format("Invalid subnet list '%s'.", rsTask.getSubnets()),
-						NetshotBadRequestException.NETSHOT_INVALID_SUBNET);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_SUBNET);
 			}
 			Domain domain;
 			if (rsTask.getDomain() == 0) {
 				logger.error("Domain {} is invalid (0).", rsTask.getDomain());
 				throw new NetshotBadRequestException("Invalid domain",
-						NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 			}
 			Session session = Database.getSession();
 			try {
@@ -4661,7 +4571,7 @@ public class RestService extends Thread {
 			catch (Exception e) {
 				logger.error("Unable to load the domain {}.", rsTask.getDomain());
 				throw new NetshotBadRequestException("Invalid domain",
-						NetshotBadRequestException.NETSHOT_INVALID_DOMAIN);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DOMAIN);
 			}
 			finally {
 				session.close();
@@ -4682,7 +4592,7 @@ public class RestService extends Thread {
 			if (rsTask.getDaysToPurge() < 2) {
 				logger.error(String.format("Invalid number of days %d for the PurgeDatabaseTask task.", rsTask.getDaysToPurge()));
 				throw new NetshotBadRequestException("Invalid number of days.",
-						NetshotBadRequestException.NETSHOT_INVALID_TASK);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 			}
 			int configDays = rsTask.getConfigDaysToPurge();
 			int configSize = rsTask.getConfigSizeToPurge();
@@ -4694,23 +4604,23 @@ public class RestService extends Thread {
 			else if (configDays <= 3) {
 				logger.error("The number of days of configurations to purge must be greater than 3.");
 				throw new NetshotBadRequestException("The number of days of configurations to purge must be greater than 3.",
-						NetshotBadRequestException.NETSHOT_INVALID_TASK);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 			}
 			else {
 				if (configSize < 0) {
 					logger.error("The configuration size limit can't be negative.");
 					throw new NetshotBadRequestException("The limit on the configuration size can't be negative.",
-							NetshotBadRequestException.NETSHOT_INVALID_TASK);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 				}
 				if (configKeepDays < 0) {
 					logger.error("The interval of days between configurations to keep can't be negative.");
 					throw new NetshotBadRequestException("The number of days of configurations to purge can't be negative.",
-							NetshotBadRequestException.NETSHOT_INVALID_TASK);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 				}
 				if (configDays <= configKeepDays) {
 					logger.error("The number of days of configurations to purge must be greater than the number of days between two successive configurations to keep.");
 					throw new NetshotBadRequestException("The number of days of configurations to purge must be greater than the number of days between two successive configurations to keep.",
-							NetshotBadRequestException.NETSHOT_INVALID_TASK);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 				}
 			}
 			task = new PurgeDatabaseTask(rsTask.getComments(), userName, rsTask.getDaysToPurge(),
@@ -4725,13 +4635,13 @@ public class RestService extends Thread {
 				if (device == null) {
 					logger.error("Unable to find the device {}.", rsTask.getDevice());
 					throw new NetshotBadRequestException("Unable to find the device.",
-							NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 				}
 			}
 			catch (HibernateException e) {
 				logger.error("Error while retrieving the device.", e);
 				throw new NetshotBadRequestException("Database error.",
-						NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 			}
 			finally {
 				session.close();
@@ -4741,7 +4651,7 @@ public class RestService extends Thread {
 		else {
 			logger.error("User posted an invalid task type '{}'.", rsTask.getType());
 			throw new NetshotBadRequestException("Invalid task type.",
-					NetshotBadRequestException.NETSHOT_INVALID_TASK);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 		}
 		if (rsTask.getScheduleReference() != null) {
 			task.setDebugEnabled(rsTask.isDebugEnabled());
@@ -4757,24 +4667,25 @@ public class RestService extends Thread {
 							task.getScheduleReference(), inOneMinute.getTime());
 					throw new NetshotBadRequestException(
 							"The schedule occurs in the past.",
-							NetshotBadRequestException.NETSHOT_INVALID_TASK);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 				}
 			}
 		}
 		try {
 			TaskManager.addTask(task);
 			Netshot.aaaLogger.info("The task {} has been created.", task);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to add the task.", e);
 			throw new NetshotBadRequestException(
 					"Unable to add the task to the database.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (SchedulerException e) {
 			logger.error("Unable to schedule the task.", e);
 			throw new NetshotBadRequestException("Unable to schedule the task.",
-					NetshotBadRequestException.NETSHOT_SCHEDULE_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_SCHEDULE_ERROR);
 		}
 		return task;
 	}
@@ -4813,6 +4724,7 @@ public class RestService extends Thread {
 		 * @return the device name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDeviceName() {
 			return deviceName;
 		}
@@ -4832,6 +4744,7 @@ public class RestService extends Thread {
 		 * @return the device id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDeviceId() {
 			return deviceId;
 		}
@@ -4851,6 +4764,7 @@ public class RestService extends Thread {
 		 * @return the author
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getAuthor() {
 			return author;
 		}
@@ -4870,6 +4784,7 @@ public class RestService extends Thread {
 		 * @return the old change date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getOldChangeDate() {
 			return oldChangeDate;
 		}
@@ -4889,6 +4804,7 @@ public class RestService extends Thread {
 		 * @return the new change date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getNewChangeDate() {
 			return newChangeDate;
 		}
@@ -4908,6 +4824,7 @@ public class RestService extends Thread {
 		 * @return the old id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getOldId() {
 			return oldId;
 		}
@@ -4927,6 +4844,7 @@ public class RestService extends Thread {
 		 * @return the new id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getNewId() {
 			return newId;
 		}
@@ -4971,6 +4889,7 @@ public class RestService extends Thread {
 		 * @return the from date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getFromDate() {
 			return fromDate;
 		}
@@ -4990,6 +4909,7 @@ public class RestService extends Thread {
 		 * @return the to date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getToDate() {
 			return toDate;
 		}
@@ -5013,10 +4933,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("changes")
+	@Path("/changes")
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get last configuration changes",
+		description = "Retrieves the list of last configuration changes, based on passed criteria."
+	)
 	public List<RsConfigChange> getChanges(RsChangeCriteria criteria) throws WebApplicationException {
 		logger.debug("REST request, config changes.");
 		Session session = Database.getSession();
@@ -5034,7 +4958,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the devices", e);
 			throw new NetshotBadRequestException("Unable to fetch the devices",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5049,9 +4973,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("policies")
+	@Path("/policies")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the compliance policies",
+		description = "Returns the list of compliance policies."
+	)
 	public List<Policy> getPolicies() throws WebApplicationException {
 		logger.debug("REST request, get policies.");
 		Session session = Database.getSession();
@@ -5064,7 +4992,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the policies.", e);
 			throw new NetshotBadRequestException("Unable to fetch the policies",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5080,9 +5008,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("rules/policy/{id}")
+	@Path("/rules/policy/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the compliance rules of a policy",
+		description = "Returns the rules owned by a given compliance policy."
+	)
 	public List<Rule> getPolicyRules(@PathParam("id") Long id) throws WebApplicationException {
 		logger.debug("REST request, get rules for policy {}.", id);
 		Session session = Database.getSession();
@@ -5091,7 +5023,7 @@ public class RestService extends Thread {
 			if (policy == null) {
 				logger.error("Invalid policy.");
 				throw new NetshotBadRequestException("Invalid policy",
-						NetshotBadRequestException.NETSHOT_INVALID_POLICY);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY);
 			}
 			List<Rule> rules = new ArrayList<Rule>();
 			rules.addAll(policy.getRules());
@@ -5100,7 +5032,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the rules.", e);
 			throw new NetshotBadRequestException("Unable to fetch the rules",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5136,6 +5068,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -5155,6 +5088,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -5174,6 +5108,7 @@ public class RestService extends Thread {
 		 * @return the group
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -5197,17 +5132,21 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("policies")
+	@Path("/policies")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a compliance policy",
+		description = "Creates a compliance policy."
+	)
 	public Policy addPolicy(RsPolicy rsPolicy) throws WebApplicationException {
 		logger.debug("REST request, add policy.");
 		String name = rsPolicy.getName().trim();
 		if (name.isEmpty()) {
 			logger.warn("User posted an empty policy name.");
 			throw new NetshotBadRequestException("Invalid policy name.",
-					NetshotBadRequestException.NETSHOT_INVALID_POLICY_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY_NAME);
 		}
 		Policy policy;
 		Session session = Database.getSession();
@@ -5224,26 +5163,27 @@ public class RestService extends Thread {
 			session.save(policy);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created.", policy);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The posted group doesn't exist", e);
 			throw new NetshotBadRequestException(
 					"Invalid group",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new policy.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A policy with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_POLICY);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_POLICY);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the policy to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5259,9 +5199,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("policies/{id}")
+	@Path("/policies/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a compliance policy",
+		description = "Removes a given compliance policy, by ID"
+	)
 	public void deletePolicy(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete policy {}.", id);
@@ -5272,18 +5216,19 @@ public class RestService extends Thread {
 			session.delete(policy);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted.", policy);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The policy {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The policy doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_POLICY);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the policy {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the policy",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5300,10 +5245,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("policies/{id}")
+	@Path("/policies/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a compliance policy",
+		description = "Edits a compliance policy, by ID."
+	)
 	public Policy setPolicy(@PathParam("id") Long id, RsPolicy rsPolicy)
 			throws WebApplicationException {
 		logger.debug("REST request, edit policy {}.", id);
@@ -5314,14 +5263,14 @@ public class RestService extends Thread {
 			if (policy == null) {
 				logger.error("Unable to find the policy {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this policy.",
-						NetshotBadRequestException.NETSHOT_INVALID_POLICY);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY);
 			}
 
 			String name = rsPolicy.getName().trim();
 			if (name.isEmpty()) {
 				logger.warn("User posted an empty policy name.");
 				throw new NetshotBadRequestException("Invalid policy name.",
-						NetshotBadRequestException.NETSHOT_INVALID_POLICY_NAME);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY_NAME);
 			}
 			policy.setName(name);
 			
@@ -5347,19 +5296,19 @@ public class RestService extends Thread {
 					rsPolicy.getGroup(), id, e);
 			throw new NetshotBadRequestException(
 					"Unable to find the group.",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to save the policy {}.", id, e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A policy with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_POLICY);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_POLICY);
 			}
 			throw new NetshotBadRequestException("Unable to save the policy.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -5415,6 +5364,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getId() {
 			return id;
 		}
@@ -5434,6 +5384,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -5449,6 +5400,7 @@ public class RestService extends Thread {
 		
 		
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -5463,6 +5415,7 @@ public class RestService extends Thread {
 		 * @return the script
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -5482,6 +5435,7 @@ public class RestService extends Thread {
 		 * @return the policy
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getPolicy() {
 			return policy;
 		}
@@ -5492,6 +5446,7 @@ public class RestService extends Thread {
 		 * @return true, if is enabled
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isEnabled() {
 			return enabled;
 		}
@@ -5520,6 +5475,7 @@ public class RestService extends Thread {
 		 * @return the exemptions
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Map<Long, Date> getExemptions() {
 			return exemptions;
 		}
@@ -5534,6 +5490,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getText() {
 			return text;
 		}
@@ -5543,6 +5500,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isRegExp() {
 			return regExp;
 		}
@@ -5552,6 +5510,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getContext() {
 			return context;
 		}
@@ -5561,6 +5520,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getField() {
 			return field;
 		}
@@ -5570,6 +5530,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -5579,6 +5540,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isInvert() {
 			return invert;
 		}
@@ -5588,6 +5550,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isAnyBlock() {
 			return anyBlock;
 		}
@@ -5597,6 +5560,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isMatchAll() {
 			return matchAll;
 		}
@@ -5606,6 +5570,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Boolean isNormalize() {
 			return normalize;
 		}
@@ -5624,16 +5589,20 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("rules")
+	@Path("/rules")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a compliance rule",
+		description = "Creates a compliance rule. The associated policy must already exist."
+	)
 	public Rule addRule(RsRule rsRule) throws WebApplicationException {
 		logger.debug("REST request, add rule.");
 		if (rsRule.getName() == null || rsRule.getName().trim().isEmpty()) {
 			logger.warn("User posted an empty rule name.");
 			throw new NetshotBadRequestException("Invalid rule name.",
-					NetshotBadRequestException.NETSHOT_INVALID_RULE_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE_NAME);
 		}
 		String name = rsRule.getName().trim();
 
@@ -5654,6 +5623,7 @@ public class RestService extends Thread {
 			session.save(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created.", rule);
+			this.suggestReturnCode(Response.Status.CREATED);
 			return rule;
 		}
 		catch (ObjectNotFoundException e) {
@@ -5661,20 +5631,20 @@ public class RestService extends Thread {
 			logger.error("The posted policy doesn't exist.", e);
 			throw new NetshotBadRequestException(
 					"Invalid policy.",
-					NetshotBadRequestException.NETSHOT_INVALID_POLICY);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new rule.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A rule with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_RULE);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_RULE);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the rule to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5691,10 +5661,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("rules/{id}")
+	@Path("/rules/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a compliance rule",
+		description = "Edits a compliance rule, by ID."
+	)
 	public Rule setRule(@PathParam("id") Long id, RsRule rsRule)
 			throws WebApplicationException {
 		logger.debug("REST request, edit rule {}.", id);
@@ -5705,7 +5679,7 @@ public class RestService extends Thread {
 			if (rule == null) {
 				logger.error("Unable to find the rule {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this rule.",
-						NetshotBadRequestException.NETSHOT_INVALID_RULE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 			}
 
 			if (rsRule.getName() != null) {
@@ -5713,7 +5687,7 @@ public class RestService extends Thread {
 				if (name.isEmpty()) {
 					logger.warn("User posted an empty rule name.");
 					throw new NetshotBadRequestException("Invalid rule name.",
-							NetshotBadRequestException.NETSHOT_INVALID_RULE_NAME);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE_NAME);
 				}
 				rule.setName(name);
 			}
@@ -5784,14 +5758,14 @@ public class RestService extends Thread {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new rule.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A rule with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_RULE);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_RULE);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to save the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -5810,9 +5784,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("rules/{id}")
+	@Path("/rules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a compliance rule",
+		description = "Removes a compliance rule, by ID."
+	)
 	public void deleteRule(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete rule {}.", id);
@@ -5823,18 +5801,19 @@ public class RestService extends Thread {
 			session.delete(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted.", rule);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The rule {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The rule doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_RULE);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the rule {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -5857,6 +5836,7 @@ public class RestService extends Thread {
 		 * @return the device
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDevice() {
 			return device;
 		}
@@ -5892,6 +5872,7 @@ public class RestService extends Thread {
 		 * @return the result
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public CheckResult.ResultOption getResult() {
 			return result;
 		}
@@ -5911,6 +5892,7 @@ public class RestService extends Thread {
 		 * @return the script error
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getScriptError() {
 			return scriptError;
 		}
@@ -5927,18 +5909,22 @@ public class RestService extends Thread {
 	}
 
 	/**
-	 * Test js rule.
+	 * Test rule.
 	 *
 	 * @param request the request
 	 * @param rsRule the rs rule
-	 * @return the rs js rule test result
+	 * @return the rule test result
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("rules/test")
+	@Path("/rules/test")
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Test a compliance rule",
+		description = "Test a compliance rule against a given device, in dry run mode."
+	)
 	public RsRuleTestResult testRule(RsRuleTest rsRule) throws WebApplicationException {
 		logger.debug("REST request, rule test.");
 		Device device;
@@ -5950,7 +5936,7 @@ public class RestService extends Thread {
 			if (device == null) {
 				logger.warn("Unable to find the device {}.", rsRule.getDevice());
 				throw new NetshotBadRequestException("Unable to find the device.",
-						NetshotBadRequestException.NETSHOT_INVALID_DEVICE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DEVICE);
 			}
 			
 			Rule rule;
@@ -5977,29 +5963,34 @@ public class RestService extends Thread {
 			RsRuleTestResult result = new RsRuleTestResult();
 
 			StringBuffer log = new StringBuffer();
-			TaskLogger taskLogger = new TaskLogger(){
+			TaskLogger taskLogger = new TaskLogger() {
 			
 				@Override
+				@Export
 				public void warn(String message) {
 					log.append(String.format("[WARN] %s\n", message));
 				}
 			
 				@Override
+				@Export
 				public void trace(String message) {
 					log.append(String.format("[TRACE] %s\n", message));
 				}
 			
 				@Override
+				@Export
 				public void info(String message) {
 					log.append(String.format("[INFO] %s\n", message));
 				}
 			
 				@Override
+				@Export
 				public void error(String message) {
 					log.append(String.format("[ERROR] %s\n", message));
 				}
 			
 				@Override
+				@Export
 				public void debug(String message) {
 					log.append(String.format("[DEBUG] %s\n", message));
 				}
@@ -6015,7 +6006,7 @@ public class RestService extends Thread {
 		catch (Exception e) {
 			logger.error("Unable to retrieve the device {}.", rsRule.getDevice(), e);
 			throw new NetshotBadRequestException("Unable to retrieve the device.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6037,6 +6028,7 @@ public class RestService extends Thread {
 		 * @return the expiration date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getExpirationDate() {
 			return expirationDate;
 		}
@@ -6061,9 +6053,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/rule/{id}")
+	@Path("/devices/rule/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the exempted devices of a compliance rule",
+		description = "Returns the list of devices which have an exemption against a given compliance rule, by ID."
+	)
 	public List<RsLightExemptedDevice> getExemptedDevices(@PathParam("id") Long id) throws WebApplicationException {
 		logger.debug("REST request, get exemptions for rule {}.", id);
 		Session session = Database.getSession();
@@ -6079,7 +6075,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the exemptions.", e);
 			throw new NetshotBadRequestException("Unable to fetch the exemptions",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6121,6 +6117,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Long getId() {
 			return id;
 		}
@@ -6140,6 +6137,7 @@ public class RestService extends Thread {
 		 * @return the rule name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getRuleName() {
 			return ruleName;
 		}
@@ -6159,6 +6157,7 @@ public class RestService extends Thread {
 		 * @return the policy name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPolicyName() {
 			return policyName;
 		}
@@ -6178,6 +6177,7 @@ public class RestService extends Thread {
 		 * @return the result
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public CheckResult.ResultOption getResult() {
 			return result;
 		}
@@ -6197,6 +6197,7 @@ public class RestService extends Thread {
 		 * @return the check date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getCheckDate() {
 			return checkDate;
 		}
@@ -6216,6 +6217,7 @@ public class RestService extends Thread {
 		 * @return the expiration date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getExpirationDate() {
 			return expirationDate;
 		}
@@ -6235,6 +6237,7 @@ public class RestService extends Thread {
 		 * @return the comment
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getComment() {
 			return comment;
 		}
@@ -6259,9 +6262,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}/complianceresults")
+	@Path("/devices/{id}/complianceresults")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the compliance results for a device",
+		description = "Returns the compliance results for a give device, by ID."
+	)
 	public List<RsDeviceRule> getDeviceComplianceResults(@PathParam("id") Long id) throws WebApplicationException {
 		logger.debug("REST request, get compliance results for device {}.", id);
 		Session session = Database.getSession();
@@ -6279,7 +6286,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the rules.", e);
 			throw new NetshotBadRequestException("Unable to fetch the rules",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6310,6 +6317,7 @@ public class RestService extends Thread {
 		 * @return the change count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getChangeCount() {
 			return changeCount;
 		}
@@ -6329,6 +6337,7 @@ public class RestService extends Thread {
 		 * @return the change day
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getChangeDay() {
 			return changeDay;
 		}
@@ -6353,9 +6362,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/last7dayschangesbyday")
+	@Path("/reports/last7dayschangesbyday")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the number of configuration changes for the last 7 days",
+		description = "Returns the number of device configuration changes per day, for the last 7 days."
+	)
 	public List<RsConfigChangeNumberByDateStat> getLast7DaysChangesByDayStats(@QueryParam("tz") String jsTimeZone) throws WebApplicationException {
 		logger.debug("REST request, get last 7 day changes by day stats.");
 		Session session = Database.getSession();
@@ -6391,7 +6404,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the stats.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6426,6 +6439,7 @@ public class RestService extends Thread {
 		 * @return the group id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGroupId() {
 			return groupId;
 		}
@@ -6445,6 +6459,7 @@ public class RestService extends Thread {
 		 * @return the group name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getGroupName() {
 			return groupName;
 		}
@@ -6464,6 +6479,7 @@ public class RestService extends Thread {
 		 * @return the group folder
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getGroupFolder() {
 			return groupFolder;
 		}
@@ -6483,6 +6499,7 @@ public class RestService extends Thread {
 		 * @return the compliant device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getCompliantDeviceCount() {
 			return compliantDeviceCount;
 		}
@@ -6502,6 +6519,7 @@ public class RestService extends Thread {
 		 * @return the device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6524,9 +6542,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/groupconfigcompliancestats")
+	@Path("/reports/groupconfigcompliancestats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the compliance status of a device group",
+		description = "Returns the compliance status of a given device group, by ID."
+	)
 	public List<RsGroupConfigComplianceStat> getGroupConfigComplianceStats(@QueryParam("domain") Set<Long> domains,
 			@QueryParam("group") Set<Long> deviceGroups, @QueryParam("policy") Set<Long> policies) throws WebApplicationException {
 		logger.debug("REST request, group config compliance stats.");
@@ -6572,7 +6594,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the stats.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6587,6 +6609,7 @@ public class RestService extends Thread {
 		private long deviceCount;
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getEoxDate() {
 			return eoxDate;
 		}
@@ -6594,6 +6617,7 @@ public class RestService extends Thread {
 			this.eoxDate = date;
 		}
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6614,9 +6638,13 @@ public class RestService extends Thread {
 	}
 
 	@GET
-	@Path("reports/hardwaresupportstats")
+	@Path("/reports/hardwaresupportstats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the global hardware support status",
+		description = "Returns the global hardware support status, i.e. a list of End-of-Life and End-of-Sale dates with the corresponding device count."
+	)
 	public List<RsHardwareSupportStat> getHardwareSupportStats() throws WebApplicationException {
 		logger.debug("REST request, hardware support stats.");
 		Session session = Database.getSession();
@@ -6639,11 +6667,9 @@ public class RestService extends Thread {
 			return stats;
 		}
 		catch (HibernateException e) {
-			logger.error("Unable to ge"
-					+ ""
-					+ "t the stats.", e);
+			logger.error("Unable to get the stats.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6681,6 +6707,7 @@ public class RestService extends Thread {
 		 * @return the group id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGroupId() {
 			return groupId;
 		}
@@ -6700,6 +6727,7 @@ public class RestService extends Thread {
 		 * @return the group name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getGroupName() {
 			return groupName;
 		}
@@ -6719,6 +6747,7 @@ public class RestService extends Thread {
 		 * @return the gold device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGoldDeviceCount() {
 			return goldDeviceCount;
 		}
@@ -6738,6 +6767,7 @@ public class RestService extends Thread {
 		 * @return the silver device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getSilverDeviceCount() {
 			return silverDeviceCount;
 		}
@@ -6757,6 +6787,7 @@ public class RestService extends Thread {
 		 * @return the bronze device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getBronzeDeviceCount() {
 			return bronzeDeviceCount;
 		}
@@ -6776,6 +6807,7 @@ public class RestService extends Thread {
 		 * @return the device count
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6798,9 +6830,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/groupsoftwarecompliancestats")
+	@Path("/reports/groupsoftwarecompliancestats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the global software compliance status",
+		description = "Returns the software compliance status of devices, optionally filtered by a list of device domains."
+	)
 	public List<RsGroupSoftwareComplianceStat> getGroupSoftwareComplianceStats(@QueryParam("domain") Set<Long> domains) throws WebApplicationException {
 		logger.debug("REST request, group software compliance stats.");
 		Session session = Database.getSession();
@@ -6833,7 +6869,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the stats.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -6864,6 +6900,7 @@ public class RestService extends Thread {
 		 * @return the rule name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getRuleName() {
 			return ruleName;
 		}
@@ -6874,6 +6911,7 @@ public class RestService extends Thread {
 		 * @return the policy name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPolicyName() {
 			return policyName;
 		}
@@ -6884,6 +6922,7 @@ public class RestService extends Thread {
 		 * @return the check date
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getCheckDate() {
 			return checkDate;
 		}
@@ -6894,6 +6933,7 @@ public class RestService extends Thread {
 		 * @return the result
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public ResultOption getResult() {
 			return result;
 		}
@@ -6948,9 +6988,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/configcompliancedevicestatuses")
+	@Path("/reports/configcompliancedevicestatuses")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the configuration compliance status of devices",
+		description = "Returns the configuration compliance status of devices; optionally filtered by domain, group, policy or compliance level."
+	)
 	public List<RsLightPolicyRuleDevice> getConfigComplianceDeviceStatuses(
 			@QueryParam("domain") Set<Long> domains,
 			@QueryParam("group") Set<Long> groups,
@@ -7001,7 +7045,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the devices.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7017,9 +7061,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/groupconfignoncompliantdevices/{id}")
+	@Path("/reports/groupconfignoncompliantdevices/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the non compliant devices of a group",
+		description = "Returns the list of non-compliance devices part of a given group, optionally filtered by domains and policies"
+	)
 	public List<RsLightPolicyRuleDevice> getGroupConfigNonCompliantDevices(@PathParam("id") Long id,
 			@QueryParam("domain") Set<Long> domains, @QueryParam("policy") Set<Long> policies) throws WebApplicationException {
 		logger.debug("REST request, group config non compliant devices.");
@@ -7056,7 +7104,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the devices.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7064,15 +7112,19 @@ public class RestService extends Thread {
 	}
 
 	@GET
-	@Path("reports/hardwaresupportdevices/{type}/{date}")
+	@Path("/reports/hardwaresupportdevices/{type}/{date}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the End-of-Life or End-of-Sale devices matching a date.",
+		description = "Returns the list of devices getting End-of-Life (type 'eol') or End-of-Sale (type 'eos') at the given date (or never if 'date' is not given)."
+	)
 	public List<RsLightDevice> getHardwareStatusDevices(@PathParam("type") String type, @PathParam("date") Long date) throws WebApplicationException {
 		logger.debug("REST request, EoX devices by type and date.");
 		if (!type.equals("eol") && !type.equals("eos")) {
 			logger.error("Invalid requested EoX type.");
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		Date eoxDate = new Date(date);
 		Session session = Database.getSession();
@@ -7100,7 +7152,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the devices.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7115,9 +7167,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("hardwarerules")
+	@Path("/hardwarerules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the hardware compliance rules",
+		description = "Returns the list of hardware compliance rules."
+	)
 	public List<HardwareRule> getHardwareRules() throws WebApplicationException {
 		logger.debug("REST request, hardware rules.");
 		Session session = Database.getSession();
@@ -7130,7 +7186,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the hardware rules.", e);
 			throw new NetshotBadRequestException("Unable to fetch the hardware rules.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7167,6 +7223,7 @@ public class RestService extends Thread {
 		private Date endOfLife = null;
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -7176,6 +7233,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -7185,6 +7243,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -7194,6 +7253,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -7203,6 +7263,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isPartNumberRegExp() {
 			return partNumberRegExp;
 		}
@@ -7212,6 +7273,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -7221,6 +7283,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isFamilyRegExp() {
 			return familyRegExp;
 		}
@@ -7230,6 +7293,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement(nillable = true)
+		@JsonView(DefaultView.class)
 		public Date getEndOfSale() {
 			return endOfSale;
 		}
@@ -7239,6 +7303,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement(nillable = true)
+		@JsonView(DefaultView.class)
 		public Date getEndOfLife() {
 			return endOfLife;
 		}
@@ -7257,10 +7322,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("hardwarerules")
+	@Path("/hardwarerules")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add an hardware compliance rule",
+		description = "Creates an hardware compliance rule."
+	)
 	public HardwareRule addHardwareRule(RsHardwareRule rsRule) throws WebApplicationException {
 		logger.debug("REST request, add hardware rule.");
 
@@ -7286,20 +7355,21 @@ public class RestService extends Thread {
 			session.save(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created", rule);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The posted group doesn't exist", e);
 			throw new NetshotBadRequestException(
 					"Invalid group",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new rule.", e);
 			throw new NetshotBadRequestException(
 					"Unable to add the rule to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7316,9 +7386,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("hardwarerules/{id}")
+	@Path("/hardwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove an hardware compliance rule",
+		description = "Removes an hardware compliance rule, by ID."
+	)
 	public void deleteHardwareRule(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete hardware rule {}.", id);
@@ -7329,18 +7403,19 @@ public class RestService extends Thread {
 			session.delete(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted", rule);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The rule {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The rule doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_RULE);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the rule {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7358,10 +7433,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("hardwarerules/{id}")
+	@Path("/hardwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update an hardware compliance rule",
+		description = "Edits an hardware compliance rule, by ID."
+	)
 	public HardwareRule setHardwareRule(@PathParam("id") Long id, RsHardwareRule rsRule)
 			throws WebApplicationException {
 		logger.debug("REST request, edit hardware rule {}.", id);
@@ -7372,7 +7451,7 @@ public class RestService extends Thread {
 			if (rule == null) {
 				logger.error("Unable to find the rule {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this rule.",
-						NetshotBadRequestException.NETSHOT_INVALID_RULE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 			}
 
 			String driver = rsRule.getDriver(); 
@@ -7404,7 +7483,7 @@ public class RestService extends Thread {
 			logger.error("Error while saving the rule.", e);
 			throw new NetshotBadRequestException(
 					"Unable to save the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -7423,9 +7502,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("softwarerules")
+	@Path("/softwarerules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the software compliance rules",
+		description = "Returns the list of software compliance rules."
+	)
 	public List<SoftwareRule> getSoftwareRules() throws WebApplicationException {
 		logger.debug("REST request, software rules.");
 		Session session = Database.getSession();
@@ -7438,7 +7521,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the software rules.", e);
 			throw new NetshotBadRequestException("Unable to fetch the software rules.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7487,6 +7570,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -7506,6 +7590,7 @@ public class RestService extends Thread {
 		 * @return the group
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -7525,6 +7610,7 @@ public class RestService extends Thread {
 		 * @return the device class name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -7539,6 +7625,7 @@ public class RestService extends Thread {
 		 * @return the version
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getVersion() {
 			return version;
 		}
@@ -7558,6 +7645,7 @@ public class RestService extends Thread {
 		 * @return the family
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -7577,6 +7665,7 @@ public class RestService extends Thread {
 		 * @return the level
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public SoftwareRule.ConformanceLevel getLevel() {
 			return level;
 		}
@@ -7596,6 +7685,7 @@ public class RestService extends Thread {
 		 * @return the priority
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public double getPriority() {
 			return priority;
 		}
@@ -7610,6 +7700,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isVersionRegExp() {
 			return versionRegExp;
 		}
@@ -7619,6 +7710,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isFamilyRegExp() {
 			return familyRegExp;
 		}
@@ -7628,6 +7720,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -7637,6 +7730,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isPartNumberRegExp() {
 			return partNumberRegExp;
 		}
@@ -7655,10 +7749,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@POST
-	@Path("softwarerules")
+	@Path("/softwarerules")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a software compliance rule",
+		description = "Creates a software compliance rule."
+	)
 	public SoftwareRule addSoftwareRule(RsSoftwareRule rsRule) throws WebApplicationException {
 		logger.debug("REST request, add software rule.");
 
@@ -7685,20 +7783,21 @@ public class RestService extends Thread {
 			session.save(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created", rule);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The posted group doesn't exist", e);
 			throw new NetshotBadRequestException(
 					"Invalid group",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new rule.", e);
 			throw new NetshotBadRequestException(
 					"Unable to add the policy to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7714,9 +7813,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("softwarerules/{id}")
+	@Path("/softwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a software compliance rule",
+		description = "Removes a software compliance rule, by ID"
+	)
 	public void deleteSoftwareRule(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete software rule {}.", id);
@@ -7727,18 +7830,19 @@ public class RestService extends Thread {
 			session.delete(rule);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted", rule);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The rule {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The rule doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_RULE);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the rule {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7756,10 +7860,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("softwarerules/{id}")
+	@Path("/softwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a software compliance rule",
+		description = "Edits a software compliance rule."
+	)
 	public SoftwareRule setSoftwareRule(@PathParam("id") Long id, RsSoftwareRule rsRule)
 			throws WebApplicationException {
 		logger.debug("REST request, edit software rule {}.", id);
@@ -7770,7 +7878,7 @@ public class RestService extends Thread {
 			if (rule == null) {
 				logger.error("Unable to find the rule {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this rule.",
-						NetshotBadRequestException.NETSHOT_INVALID_RULE);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 			}
 
 			String driver = rsRule.getDriver(); 
@@ -7804,7 +7912,7 @@ public class RestService extends Thread {
 			logger.error("Error while saving the rule.", e);
 			throw new NetshotBadRequestException(
 					"Unable to save the rule.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -7830,6 +7938,7 @@ public class RestService extends Thread {
 		 * @return the software level
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public ConformanceLevel getSoftwareLevel() {
 			return softwareLevel;
 		}
@@ -7854,9 +7963,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("reports/groupdevicesbysoftwarelevel/{id}/{level}")
+	@Path("/reports/groupdevicesbysoftwarelevel/{id}/{level}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the devices of a group based on software compliance level",
+		description = "Returns the list of devices of a given group by ID, and matching the given software compliance level."
+	)
 	public List<RsLightSoftwareLevelDevice> getGroupDevicesBySoftwareLevel(@PathParam("id") Long id, @PathParam("level") String level,
 			@QueryParam("domain") Set<Long> domains) throws WebApplicationException {
 		logger.debug("REST request, group {} devices by software level {}.", id, level);
@@ -7894,7 +8007,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the devices.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -7912,6 +8025,7 @@ public class RestService extends Thread {
 		private Date lastFailure;
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getLastSuccess() {
 			return lastSuccess;
 		}
@@ -7921,6 +8035,7 @@ public class RestService extends Thread {
 		}
 
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public Date getLastFailure() {
 			return lastFailure;
 		}
@@ -7931,9 +8046,14 @@ public class RestService extends Thread {
 	}
 	
 	@GET
-	@Path("reports/accessfailuredevices")
+	@Path("/reports/accessfailuredevices")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the devices without successful snapshot over a given period",
+		description = "Returns the list of devices which didn't have a successful snapshot over the given number of days, optionally "
+			+ "filtered by device domain."
+	)
 	public List<RsLightAccessFailureDevice> getAccessFailureDevices(@QueryParam("days") Integer days, @QueryParam("domain") Set<Long> domains) throws WebApplicationException {
 		logger.debug("REST request, devices without successful snapshot over the last {} days.", days);
 		
@@ -7980,7 +8100,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to get the devices.", e);
 			throw new NetshotBadRequestException("Unable to get the stats",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -8008,6 +8128,7 @@ public class RestService extends Thread {
 		 * @return the username
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getUsername() {
 			return username;
 		}
@@ -8027,6 +8148,7 @@ public class RestService extends Thread {
 		 * @return the password
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPassword() {
 			return password;
 		}
@@ -8046,6 +8168,7 @@ public class RestService extends Thread {
 		 * @return the new password
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getNewPassword() {
 			return newPassword;
 		}
@@ -8068,15 +8191,20 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("user/{id}")
+	@Path("/user/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "User log out",
+		description = "Terminates the current user session (useless when using API tokens)."
+	)
 	public void logout(@Context HttpServletRequest request) throws WebApplicationException {
 		logger.debug("REST logout request.");
 		User sessionUser = (User) request.getSession().getAttribute("user");
 		HttpSession httpSession = request.getSession();
 		httpSession.invalidate();
 		Netshot.aaaLogger.warn("User {} has logged out.", sessionUser.getUsername());
+		this.suggestReturnCode(Response.Status.NO_CONTENT);
 	}
 
 	/**
@@ -8088,47 +8216,51 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("user/{id}")
+	@Path("/user/{id}")
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public User setPassword(@Context HttpServletRequest request, RsLogin rsLogin) throws WebApplicationException {
+	@Operation(
+		summary = "Update a user",
+		description = "Edits a given user, by ID, especially the password for a local user."
+	)
+	public UiUser setPassword(RsLogin rsLogin) throws WebApplicationException {
 		logger.debug("REST password change request, username {}.", rsLogin.getUsername());
-		User sessionUser = (User) request.getSession().getAttribute("user");
-		Netshot.aaaLogger.warn("Password change request via REST by user {} for user {}.", sessionUser.getUsername(), rsLogin.getUsername());
+		User currentUser = (User) request.getAttribute("user");
+		Netshot.aaaLogger.warn("Password change request via REST by user {} for user {}.", currentUser.getUsername(), rsLogin.getUsername());
 
-		User user;
+		UiUser user;
 		Session session = Database.getSession();
 		try {
 			session.beginTransaction();
-			user = (User) session.bySimpleNaturalId(User.class).load(rsLogin.getUsername());
-			if (user == null || !user.getUsername().equals(sessionUser.getUsername()) || !user.isLocal()) {
+			user = (UiUser) session.bySimpleNaturalId(UiUser.class).load(rsLogin.getUsername());
+			if (user == null || !user.getUsername().equals(currentUser.getUsername()) || !user.isLocal()) {
 				throw new NetshotBadRequestException("Invalid user.",
-						NetshotBadRequestException.NETSHOT_INVALID_USER);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
 			}
 
 			if (!user.checkPassword(rsLogin.getPassword())) {
 				throw new NetshotBadRequestException("Invalid current password.",
-						NetshotBadRequestException.NETSHOT_INVALID_USER);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
 			}
 
 			String newPassword = rsLogin.getNewPassword();
 			if (newPassword.equals("")) {
 				throw new NetshotBadRequestException("The password cannot be empty.",
-						NetshotBadRequestException.NETSHOT_INVALID_USER);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
 			}
 
 			user.setPassword(newPassword);
 			session.save(user);
 			session.getTransaction().commit();
-			Netshot.aaaLogger.warn("Password successfully changed by user {} for user {}.",sessionUser.getUsername(), rsLogin.getUsername());
-			return sessionUser;
+			Netshot.aaaLogger.warn("Password successfully changed by user {} for user {}.", currentUser.getUsername(), rsLogin.getUsername());
+			return user;
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to retrieve the user {}.", rsLogin.getUsername(), e);
 			throw new NetshotBadRequestException("Unable to retrieve the user.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -8145,23 +8277,27 @@ public class RestService extends Thread {
 	 */
 	@POST
 	@PermitAll
-	@Path("user")
+	@Path("/user")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public User login(@Context HttpServletRequest request, RsLogin rsLogin) throws WebApplicationException {
+	@Operation(
+		summary = "Log in",
+		description = "Logs in (create session) by username and password (useless when using API tokens)."
+	)
+	public UiUser login(RsLogin rsLogin) throws WebApplicationException {
 		logger.debug("REST authentication request, username {}.", rsLogin.getUsername());
 		Netshot.aaaLogger.info("REST authentication request, username {}.", rsLogin.getUsername());
 
-		User user = null;
+		UiUser user = null;
 
 		Session session = Database.getSession();
 		try {
-			user = (User) session.bySimpleNaturalId(User.class).load(rsLogin.getUsername());
+			user = (UiUser) session.bySimpleNaturalId(UiUser.class).load(rsLogin.getUsername());
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to retrieve the user {}.", rsLogin.getUsername(), e);
 			throw new NetshotBadRequestException("Unable to retrieve the user.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -8177,7 +8313,7 @@ public class RestService extends Thread {
 			}
 		}
 		else {
-			User remoteUser = Radius.authenticate(rsLogin.getUsername(), rsLogin.getPassword());
+			UiUser remoteUser = Radius.authenticate(rsLogin.getUsername(), rsLogin.getPassword());
 			if (remoteUser != null && user != null) {
 				remoteUser.setLevel(user.getLevel());
 				Netshot.aaaLogger.info("Remote authentication success for user {}.", rsLogin.getUsername());
@@ -8208,10 +8344,14 @@ public class RestService extends Thread {
 	 */
 	@GET
 	@RolesAllowed("readonly")
-	@Path("user")
+	@Path("/user")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the current user",
+		description = "Returns the current logged in user."
+	)
 	public User getUser(@Context HttpServletRequest request) throws WebApplicationException {
-		User user = (User) request.getSession().getAttribute("user");
+		User user = (User) request.getAttribute("user");
 		return user;
 	}
 
@@ -8226,17 +8366,21 @@ public class RestService extends Thread {
 	@Path("/users")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public List<User> getUsers() throws WebApplicationException {
+	@Operation(
+		summary = "Get the users",
+		description = "Returns the list of Netshot users."
+	)
+	public List<UiUser> getUsers() throws WebApplicationException {
 		logger.debug("REST request, get user list.");
 		Session session = Database.getSession();
 		try {
-			List<User> users = session.createQuery("from onl.netfishers.netshot.aaa.User", User.class).list();
+			List<UiUser> users = session.createQuery("from onl.netfishers.netshot.aaa.UiUser", UiUser.class).list();
 			return users;
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to retrieve the users.", e);
 			throw new NetshotBadRequestException("Unable to retrieve the users.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -8271,6 +8415,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -8290,6 +8435,7 @@ public class RestService extends Thread {
 		 * @return the username
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getUsername() {
 			return username;
 		}
@@ -8309,6 +8455,7 @@ public class RestService extends Thread {
 		 * @return the password
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getPassword() {
 			return password;
 		}
@@ -8328,6 +8475,7 @@ public class RestService extends Thread {
 		 * @return the level
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public int getLevel() {
 			return level;
 		}
@@ -8347,6 +8495,7 @@ public class RestService extends Thread {
 		 * @return true, if is local
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isLocal() {
 			return local;
 		}
@@ -8369,18 +8518,22 @@ public class RestService extends Thread {
 	 * @return the user
 	 */
 	@POST
-	@Path("users")
+	@Path("/users")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public User addUser(RsUser rsUser) {
+	@Operation(
+		summary = "Add a user to Netshot",
+		description = "Create a Netshot user."
+	)
+	public UiUser addUser(RsUser rsUser) {
 		logger.debug("REST request, add user");
 
 		String username = rsUser.getUsername();
 		if (username == null || username.trim().isEmpty()) {
 			logger.warn("User posted an empty user name.");
 			throw new NetshotBadRequestException("Invalid user name.",
-					NetshotBadRequestException.NETSHOT_INVALID_USER_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_USER_NAME);
 		}
 		username = username.trim();
 
@@ -8389,14 +8542,14 @@ public class RestService extends Thread {
 			if (password == null || password.equals("")) {
 				logger.warn("User tries to create a local account without password.");
 				throw new NetshotBadRequestException("Please set a password.",
-						NetshotBadRequestException.NETSHOT_INVALID_PASSWORD);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_PASSWORD);
 			}
 		}
 		else {
 			password = "";
 		}
 
-		User user = new User(username, rsUser.isLocal(), password);
+		UiUser user = new UiUser(username, rsUser.isLocal(), password);
 		user.setLevel(rsUser.level);
 
 		Session session = Database.getSession();
@@ -8405,25 +8558,25 @@ public class RestService extends Thread {
 			session.save(user);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created", user);
+			this.suggestReturnCode(Response.Status.CREATED);
 			return user;
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new user.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A user with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_USER);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_USER);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the user to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
 		}
-
 	}
 
 
@@ -8437,28 +8590,32 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@PUT
-	@Path("users/{id}")
+	@Path("/users/{id}")
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public User setUser(@PathParam("id") Long id, RsUser rsUser)
+	@Operation(
+		summary = "Update a Netshot user",
+		description = "Edits a Netshot user, by ID."
+	)
+	public UiUser setUser(@PathParam("id") Long id, RsUser rsUser)
 			throws WebApplicationException {
 		logger.debug("REST request, edit user {}.", id);
 		Session session = Database.getSession();
 		try {
 			session.beginTransaction();
-			User user = (User) session.get(User.class, id);
+			UiUser user = (UiUser) session.get(UiUser.class, id);
 			if (user == null) {
 				logger.error("Unable to find the user {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this user.",
-						NetshotBadRequestException.NETSHOT_INVALID_USER);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
 			}
 
 			String username = rsUser.getUsername();
 			if (username == null || username.trim().isEmpty()) {
 				logger.warn("User posted an empty user name.");
 				throw new NetshotBadRequestException("Invalid user name.",
-						NetshotBadRequestException.NETSHOT_INVALID_USER_NAME);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_USER_NAME);
 			}
 			username = username.trim();
 			user.setUsername(username);
@@ -8471,7 +8628,7 @@ public class RestService extends Thread {
 				if (user.getHashedPassword().equals("")) {
 					logger.error("The password cannot be empty for user {}.", id);
 					throw new NetshotBadRequestException("You must set a password.",
-							NetshotBadRequestException.NETSHOT_INVALID_PASSWORD);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_PASSWORD);
 				}
 			}
 			else {
@@ -8487,13 +8644,13 @@ public class RestService extends Thread {
 			session.getTransaction().rollback();
 			logger.error("Unable to save the user {}.", id, e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A user with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_USER);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_USER);
 			}
 			throw new NetshotBadRequestException("Unable to save the user.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -8512,40 +8669,281 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("users/{id}")
+	@Path("/users/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a Netshot user.",
+		description = "Removes a user from the Netshot database."
+	)
 	public void deleteUser(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete user {}.", id);
 		Session session = Database.getSession();
 		try {
 			session.beginTransaction();
-			User user = (User) session.load(User.class, id);
+			UiUser user = (UiUser) session.load(UiUser.class, id);
 			session.delete(user);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted", user);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The user doesn't exist.");
 			throw new NetshotBadRequestException("The user doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_USER);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			throw new NetshotBadRequestException("Unable to delete the user.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
 		}
 	}
 
+
+	/**
+	 * The Class RsApiToken.
+	 */
+	@XmlRootElement
+	@XmlAccessorType(XmlAccessType.NONE)
+	public static class RsApiToken {
+
+		/** The id. */
+		private long id;
+
+		/** The description. */
+		private String description;
+
+		/** The token. */
+		private String token;
+
+		/** The level. */
+		private int level;
+
+		/**
+		 * Gets the id.
+		 *
+		 * @return the id
+		 */
+		@XmlElement
+		@JsonView(DefaultView.class)
+		public long getId() {
+			return id;
+		}
+
+		/**
+		 * Sets the id.
+		 *
+		 * @param id the new id
+		 */
+		public void setId(long id) {
+			this.id = id;
+		}
+
+		/**
+		 * Gets the description.
+		 *
+		 * @return the description
+		 */
+		@XmlElement
+		@JsonView(DefaultView.class)
+		public String getDescription() {
+			return description;
+		}
+
+		/**
+		 * Sets the description.
+		 *
+		 * @param description the new description
+		 */
+		public void setDescription(String description) {
+			this.description = description;
+		}
+
+		/**
+		 * Gets the token.
+		 *
+		 * @return the token
+		 */
+		@XmlElement
+		@JsonView(DefaultView.class)
+		public String getToken() {
+			return token;
+		}
+
+		/**
+		 * Sets the token.
+		 *
+		 * @param token the new token
+		 */
+		public void setToken(String token) {
+			this.token = token;
+		}
+
+		/**
+		 * Gets the level.
+		 *
+		 * @return the level
+		 */
+		@XmlElement
+		@JsonView(DefaultView.class)
+		public int getLevel() {
+			return level;
+		}
+
+		/**
+		 * Sets the level.
+		 *
+		 * @param level the new level
+		 */
+		public void setLevel(int level) {
+			this.level = level;
+		}
+	}
+
+	/**
+	 * Adds the API token.
+	 *
+	 * @param request the request
+	 * @param rsAPiToken the rs API token
+	 * @return the API token
+	 */
+	@POST
+	@Path("/apitokens")
+	@RolesAllowed("admin")
+	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a new API token",
+		description = "Creates a new API token."
+	)
+	public ApiToken addApiToken(RsApiToken rsApiToken) {
+		logger.debug("REST request, add API token");
+
+		String description = rsApiToken.getDescription();
+		if (description == null || description.trim().isEmpty()) {
+			description = "";
+		}
+		description = description.trim();
+
+		String token = rsApiToken.getToken();
+		if (!ApiToken.isValidToken(token)) {
+			logger.warn("The passed token is not valid");
+			throw new NetshotBadRequestException("Invalid token format.",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_API_TOKEN_FORMAT);
+		}
+
+		ApiToken apiToken = new ApiToken(description, token, rsApiToken.getLevel());
+
+		Session session = Database.getSession();
+		try {
+			session.beginTransaction();
+			session.save(apiToken);
+			session.getTransaction().commit();
+			Netshot.aaaLogger.info("{} has been created", apiToken);
+			this.suggestReturnCode(Response.Status.CREATED);
+			return apiToken;
+		}
+		catch (HibernateException e) {
+			session.getTransaction().rollback();
+			logger.error("Error while saving the new API token.", e);
+			throw new NetshotBadRequestException(
+					"Unable to add the API token to the database",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	/**
+	 * Gets the API tokens.
+	 *
+	 * @return the API tokens
+	 * @throws WebApplicationException the web application exception
+	 */
 	@GET
-	@Path("reports/export")
+	@Path("/apitokens")
+	@RolesAllowed("admin")
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the API tokens",
+		description = "Returns the list of API tokens."
+	)
+	public List<ApiToken> getApiTokens() throws WebApplicationException {
+		logger.debug("REST request, get API token list.");
+		Session session = Database.getSession();
+		try {
+			List<ApiToken> apiTokens = session.createQuery("from ApiToken", ApiToken.class).list();
+			return apiTokens;
+		}
+		catch (HibernateException e) {
+			logger.error("Unable to retrieve the API tokens.", e);
+			throw new NetshotBadRequestException("Unable to retrieve the API tokens.",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	/**
+	 * Delete API token.
+	 *
+	 * @param id the id
+	 * @throws WebApplicationException the web application exception
+	 */
+	@DELETE
+	@Path("/apitokens/{id}")
+	@RolesAllowed("admin")
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove an API token",
+		description = "Removes an API token, by ID."
+	)
+	public void deleteApiToken(@PathParam("id") Long id) throws WebApplicationException {
+		logger.debug("REST request, delete API token {}.", id);
+		Session session = Database.getSession();
+		try {
+			session.beginTransaction();
+			ApiToken apiToken = (ApiToken) session.load(ApiToken.class, id);
+			session.delete(apiToken);
+			session.getTransaction().commit();
+			Netshot.aaaLogger.info("{} has been deleted", apiToken);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
+		}
+		catch (ObjectNotFoundException e) {
+			session.getTransaction().rollback();
+			logger.error("The API token doesn't exist.");
+			throw new NetshotBadRequestException("The API token doesn't exist.",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_USER);
+		}
+		catch (HibernateException e) {
+			session.getTransaction().rollback();
+			throw new NetshotBadRequestException("Unable to delete the API token.",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+
+
+	@GET
+	@Path("/reports/export")
 	@RolesAllowed("readonly")
 	@Produces({ "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+	@Operation(
+		summary = "Export data",
+		description = "Exports data as Excel datasheet. The devices can be filtered by groups or domains. " +
+			"The report can be customized to include or not interfaces, inventory, locations, compliance, groups. " +
+			"The only supported and default output format is xlsx (Excel file)."
+	)
 	public Response getDataXLSX(@Context HttpServletRequest request,
 			@QueryParam("group") Set<Long> groups,
 			@QueryParam("domain") Set<Long> domains,
@@ -8556,7 +8954,7 @@ public class RestService extends Thread {
 			@DefaultValue("false") @QueryParam("groups") boolean exportGroups,
 			@DefaultValue("xlsx") @QueryParam("format") String fileFormat) throws WebApplicationException {
 		logger.debug("REST request, export data.");
-		User user = (User) request.getSession().getAttribute("user");
+		User user = (User) request.getAttribute("user");
 
 		if (fileFormat.compareToIgnoreCase("xlsx") == 0) {
 			String fileName = String.format("netshot-export_%s.xlsx", (new SimpleDateFormat("yyyyMMdd-HHmmss")).format(new Date()));
@@ -9131,30 +9529,34 @@ public class RestService extends Thread {
 	}
 	
 	@POST
-	@Path("scripts")
+	@Path("/scripts")
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-	public DeviceJsScript addScript(@Context HttpServletRequest request, DeviceJsScript rsScript) throws WebApplicationException {
+	@Operation(
+		summary = "Add a command script",
+		description = "Create a command script (script to be later run over devices)."
+	)
+	public DeviceJsScript addScript(DeviceJsScript rsScript) throws WebApplicationException {
 		logger.debug("REST request, add device script.");
 		DeviceDriver driver = DeviceDriver.getDriverByName(rsScript.getDeviceDriver());
 		if (driver == null) {
 			logger.warn("Invalid driver name.");
 			throw new NetshotBadRequestException("Invalid driver name.",
-					NetshotBadRequestException.NETSHOT_INVALID_SCRIPT);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SCRIPT);
 		}
 		if (rsScript.getName() == null || rsScript.getName().trim().equals("")) {
 			logger.warn("Invalid script name.");
 			throw new NetshotBadRequestException("Invalid script name.",
-					NetshotBadRequestException.NETSHOT_INVALID_SCRIPT);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SCRIPT);
 		}
 		if (rsScript.getScript() == null) {
 			logger.warn("Invalid script.");
 			throw new NetshotBadRequestException("The script content can't be empty.",
-					NetshotBadRequestException.NETSHOT_INVALID_SCRIPT);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SCRIPT);
 		}
 		try {
-			User user = (User) request.getSession().getAttribute("user");
+			User user = (User) request.getAttribute("user");
 			rsScript.setAuthor(user.getUsername());
 		}
 		catch (Exception e) {
@@ -9167,20 +9569,21 @@ public class RestService extends Thread {
 			session.save(rsScript);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created", rsScript);
+			this.suggestReturnCode(Response.Status.CREATED);
 			return rsScript;
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new rule.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A script with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_SCRIPT);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_SCRIPT);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the script to the database",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9188,9 +9591,13 @@ public class RestService extends Thread {
 	}
 	
 	@DELETE
-	@Path("scripts/{id}")
+	@Path("/scripts/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a script",
+		description = "Removes a given script, by ID."
+	)
 	public void deleteScript(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete script {}.", id);
@@ -9201,18 +9608,19 @@ public class RestService extends Thread {
 			session.delete(script);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted", script);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The script {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The script doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_SCRIPT);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SCRIPT);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the script {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the script.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9220,9 +9628,13 @@ public class RestService extends Thread {
 	}
 	
 	@GET
-	@Path("scripts/{id}")
+	@Path("/scripts/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get a command script",
+		description = "Returns a given command script, by ID."
+	)
 	public DeviceJsScript getScript(@PathParam("id") Long id) {
 		logger.debug("REST request, get script {}", id);
 		Session session = Database.getSession();
@@ -9233,12 +9645,12 @@ public class RestService extends Thread {
 		catch (ObjectNotFoundException e) {
 			logger.error("Unable to find the script {}.", id, e);
 			throw new NetshotBadRequestException("Script not found.",
-					NetshotBadRequestException.NETSHOT_INVALID_SCRIPT);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_SCRIPT);
 		}
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the script {}.", id, e);
 			throw new NetshotBadRequestException("Unable to fetch the script.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9246,9 +9658,13 @@ public class RestService extends Thread {
 	}
 	
 	@GET
-	@Path("scripts")
+	@Path("/scripts")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get command scripts",
+		description = "Returns the list of command scripts."
+	)
 	public List<DeviceJsScript> getScripts() {
 		logger.debug("REST request, get scripts.");
 		Session session = Database.getSession();
@@ -9263,7 +9679,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the scripts.", e);
 			throw new NetshotBadRequestException("Unable to fetch the scripts",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9326,6 +9742,7 @@ public class RestService extends Thread {
 		 * @return the deviceDriver
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getDeviceDriver() {
 			return deviceDriver;
 		}
@@ -9343,6 +9760,7 @@ public class RestService extends Thread {
 		 * @return the id
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -9362,6 +9780,7 @@ public class RestService extends Thread {
 		 * @return the name
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -9381,6 +9800,7 @@ public class RestService extends Thread {
 		 * @return the target group
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public long getTargetGroup() {
 			return targetGroup;
 		}
@@ -9399,6 +9819,7 @@ public class RestService extends Thread {
 		 * @return the enabled True to enable, false to disable
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public boolean isEnabled() {
 			return enabled;
 		}
@@ -9415,6 +9836,7 @@ public class RestService extends Thread {
 		 * @return the script
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -9431,6 +9853,7 @@ public class RestService extends Thread {
 		 * @return the command
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getCommand() {
 			return command;
 		}
@@ -9447,6 +9870,7 @@ public class RestService extends Thread {
 		 * @return the modifierPattern
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getModifierPattern() {
 			return modifierPattern;
 		}
@@ -9463,6 +9887,7 @@ public class RestService extends Thread {
 		 * @return the modifierReplacement
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getModifierReplacement() {
 			return modifierReplacement;
 		}
@@ -9479,6 +9904,7 @@ public class RestService extends Thread {
 		 * @return the type
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -9496,6 +9922,7 @@ public class RestService extends Thread {
 		 * @return the cliMode
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getCliMode() {
 			return cliMode;
 		}
@@ -9513,6 +9940,7 @@ public class RestService extends Thread {
 		 * @return the resultType
 		 */
 		@XmlElement
+		@JsonView(DefaultView.class)
 		public String getResultType() {
 			return resultType;
 		}
@@ -9536,9 +9964,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("diagnostics")
+	@Path("/diagnostics")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get the diagnostics",
+		description = "Returns the list of diagnostics."
+	)
 	public List<Diagnostic> getDiagnostics() throws WebApplicationException {
 		logger.debug("REST request, get diagnotics.");
 		Session session = Database.getSession();
@@ -9551,7 +9983,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the diagnostics.", e);
 			throw new NetshotBadRequestException("Unable to fetch the diagnostics",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9560,22 +9992,26 @@ public class RestService extends Thread {
 
 	
 	@POST
-	@Path("diagnostics")
+	@Path("/diagnostics")
 	@RolesAllowed("executereadwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Add a diagnostic.",
+		description = "Creates a diagnostic."
+	)
 	public Diagnostic addDiagnostic(RsDiagnostic rsDiagnostic) throws WebApplicationException {
 		logger.debug("REST request, add diagnostic");
 		String name = rsDiagnostic.getName().trim();
 		if (name.isEmpty()) {
 			logger.warn("User posted an empty diagnostic name.");
 			throw new NetshotBadRequestException("Invalid diagnostic name.",
-					NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC_NAME);
 		}
 		if (name.contains("\"")) {
 			logger.warn("Double-quotes are not allowed in the diagnostic name.");
 			throw new NetshotBadRequestException("Double-quotes are not allowed in the name.",
-					NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC_NAME);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC_NAME);
 		}
 		AttributeType resultType;
 		try {
@@ -9583,7 +10019,7 @@ public class RestService extends Thread {
 		}
 		catch (Exception e) {
 			throw new NetshotBadRequestException("Invalid diagnostic result type.",
-				NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+				NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 		}
 
 		Diagnostic diagnostic;
@@ -9599,7 +10035,7 @@ public class RestService extends Thread {
 				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim() == "") {
 					throw new NetshotBadRequestException(
 						"Invalid diagnostic script",
-						NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				diagnostic = new JavaScriptDiagnostic(name, rsDiagnostic.isEnabled(), group, 
 						resultType, rsDiagnostic.getScript());
@@ -9607,11 +10043,11 @@ public class RestService extends Thread {
 			else if (".SimpleDiagnostic".equals(rsDiagnostic.getType())) {
 				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim() == "") {
 					throw new NetshotBadRequestException("The CLI mode must be provided.",
-							NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim() == "") {
 					throw new NetshotBadRequestException("The command cannot be empty.",
-							NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				diagnostic = new SimpleDiagnostic(name, rsDiagnostic.isEnabled(), group, resultType, rsDiagnostic.getDeviceDriver(),
 						rsDiagnostic.getCliMode(), rsDiagnostic.getCommand(), rsDiagnostic.getModifierPattern(),
@@ -9620,32 +10056,33 @@ public class RestService extends Thread {
 			else {
 				throw new NetshotBadRequestException(
 					"Invalid diagnostic type.",
-					NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC_TYPE);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC_TYPE);
 			}
 			
 			session.save(diagnostic);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been created", diagnostic);
+			this.suggestReturnCode(Response.Status.CREATED);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The posted group doesn't exist", e);
 			throw new NetshotBadRequestException(
 					"Invalid group",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Error while saving the new diagnostic.", e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException(
 						"A diagnostic with this name already exists.",
-						NetshotBadRequestException.NETSHOT_DUPLICATE_DIAGNOSTIC);
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DIAGNOSTIC);
 			}
 			throw new NetshotBadRequestException(
 					"Unable to add the policy to the database.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9664,10 +10101,14 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException a web application exception
 	 */
 	@PUT
-	@Path("diagnostics/{id}")
+	@Path("/diagnostics/{id}")
 	@RolesAllowed("executereadwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Update a diagnostic",
+		description = "Creates a new diagnostic."
+	)
 	public Diagnostic setDiagnostic(@PathParam("id") Long id, RsDiagnostic rsDiagnostic)
 			throws WebApplicationException {
 		logger.debug("REST request, edit diagnostic {}.", id);
@@ -9678,19 +10119,19 @@ public class RestService extends Thread {
 			if (diagnostic == null) {
 				logger.error("Unable to find the diagnostic {} to be edited.", id);
 				throw new NetshotBadRequestException("Unable to find this diagnostic.",
-						NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 			}
 			
 			String name = rsDiagnostic.getName().trim();
 			if (name.isEmpty()) {
 				logger.warn("User posted an empty diagnostic name.");
 				throw new NetshotBadRequestException("Invalid diagnostic name.",
-						NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC_NAME);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC_NAME);
 			}
 			if (name.contains("\"")) {
 				logger.warn("Double-quotes are not allowed in the diagnostic name.");
 				throw new NetshotBadRequestException("Double-quotes are not allowed in the name.",
-						NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC_NAME);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC_NAME);
 			}
 			AttributeType resultType;
 			try {
@@ -9698,7 +10139,7 @@ public class RestService extends Thread {
 			}
 			catch (Exception e) {
 				throw new NetshotBadRequestException("Invalid diagnostic result type.",
-					NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 			}
 			diagnostic.setName(name);
 			if (diagnostic.getTargetGroup() != null && diagnostic.getTargetGroup().getId() != rsDiagnostic.getTargetGroup()) {
@@ -9717,27 +10158,27 @@ public class RestService extends Thread {
 			if (diagnostic instanceof JavaScriptDiagnostic) {
 				if (!".JavaScriptDiagnostic".equals(rsDiagnostic.getType())) {
 					throw new NetshotBadRequestException("Incompatible posted diagnostic.",
-							NetshotBadRequestException.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
 				}
 				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim() == "") {
 					throw new NetshotBadRequestException(
 						"Invalid diagnostic script",
-						NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				((JavaScriptDiagnostic) diagnostic).setScript(rsDiagnostic.getScript());
 			}
 			else if (diagnostic instanceof SimpleDiagnostic) {
 				if (!".SimpleDiagnostic".equals(rsDiagnostic.getType())) {
 					throw new NetshotBadRequestException("Incompatible posted diagnostic.",
-							NetshotBadRequestException.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
 				}
 				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim() == "") {
 					throw new NetshotBadRequestException("The CLI mode must be provided.",
-							NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim() == "") {
 					throw new NetshotBadRequestException("The command cannot be empty.",
-							NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				SimpleDiagnostic simpleDiagnostic = (SimpleDiagnostic) diagnostic;
 				simpleDiagnostic.setDeviceDriver(rsDiagnostic.getDeviceDriver());
@@ -9758,18 +10199,18 @@ public class RestService extends Thread {
 					rsDiagnostic.getTargetGroup(), id, e);
 			throw new NetshotBadRequestException(
 					"Unable to find the group.",
-					NetshotBadRequestException.NETSHOT_INVALID_GROUP);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_GROUP);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to save the diagnostic {}.", id, e);
 			Throwable t = e.getCause();
-			if (t != null && t.getMessage().contains("Duplicate entry")) {
+			if (t != null && t.getMessage().contains("uplicate")) {
 				throw new NetshotBadRequestException("A diagnostic with this name already exists.",
-					NetshotBadRequestException.NETSHOT_DUPLICATE_DIAGNOSTIC);
+					NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_DIAGNOSTIC);
 			}
 			throw new NetshotBadRequestException("Unable to save the policy.",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		catch (WebApplicationException e) {
 			session.getTransaction().rollback();
@@ -9789,9 +10230,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@DELETE
-	@Path("diagnostics/{id}")
+	@Path("/diagnostics/{id}")
 	@RolesAllowed("executereadwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Remove a diagnostic",
+		description = "Removes a given diagnostic, by ID."
+	)
 	public void deleteDiagnostic(@PathParam("id") Long id)
 			throws WebApplicationException {
 		logger.debug("REST request, delete diagnostic {}.", id);
@@ -9802,18 +10247,19 @@ public class RestService extends Thread {
 			session.delete(diagnostic);
 			session.getTransaction().commit();
 			Netshot.aaaLogger.info("{} has been deleted", diagnostic);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
 		}
 		catch (ObjectNotFoundException e) {
 			session.getTransaction().rollback();
 			logger.error("The diagnostic {} to be deleted doesn't exist.", id, e);
 			throw new NetshotBadRequestException("The diagnostic doesn't exist.",
-					NetshotBadRequestException.NETSHOT_INVALID_DIAGNOSTIC);
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 		}
 		catch (HibernateException e) {
 			session.getTransaction().rollback();
 			logger.error("Unable to delete the diagnostic {}.", id, e);
 			throw new NetshotBadRequestException("Unable to delete the diagnostic",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();
@@ -9829,9 +10275,13 @@ public class RestService extends Thread {
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
-	@Path("devices/{id}/diagnosticresults")
+	@Path("/devices/{id}/diagnosticresults")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Operation(
+		summary = "Get diagnostic results",
+		description = "Returns the results of a given diagnostic, by ID."
+	)
 	public List<DiagnosticResult> getDeviceDiagnosticResults(@PathParam("id") Long id) throws WebApplicationException {
 		logger.debug("REST request, get diagnostic results for device {}.", id);
 		Session session = Database.getSession();
@@ -9845,7 +10295,7 @@ public class RestService extends Thread {
 		catch (HibernateException e) {
 			logger.error("Unable to fetch the diagnostic results.", e);
 			throw new NetshotBadRequestException("Unable to fetch the diagnostic results",
-					NetshotBadRequestException.NETSHOT_DATABASE_ACCESS_ERROR);
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
 		finally {
 			session.close();

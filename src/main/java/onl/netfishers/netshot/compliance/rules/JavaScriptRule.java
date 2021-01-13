@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2016 Sylvain Cadilhac (NetFishers)
+ * Copyright 2013-2021 Sylvain Cadilhac (NetFishers)
  * 
  * This file is part of Netshot.
  * 
@@ -24,12 +24,10 @@ import java.io.InputStreamReader;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
-import javax.script.Bindings;
-import javax.script.Invocable;
-import javax.script.ScriptEngine;
-import javax.script.ScriptEngineManager;
-import javax.script.ScriptException;
+import javax.persistence.Transient;
 import javax.xml.bind.annotation.XmlElement;
+
+import com.fasterxml.jackson.annotation.JsonView;
 
 import onl.netfishers.netshot.compliance.CheckResult;
 import onl.netfishers.netshot.compliance.Policy;
@@ -38,8 +36,14 @@ import onl.netfishers.netshot.compliance.CheckResult.ResultOption;
 import onl.netfishers.netshot.device.Device;
 import onl.netfishers.netshot.device.DeviceDriver;
 import onl.netfishers.netshot.device.script.helper.JsDeviceHelper;
+import onl.netfishers.netshot.rest.RestViews.DefaultView;
 import onl.netfishers.netshot.work.TaskLogger;
 
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
+import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.Value;
 import org.hibernate.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,15 +60,12 @@ public class JavaScriptRule extends Rule {
 	/** The logger. */
 	private static Logger logger = LoggerFactory.getLogger(JavaScriptRule.class);
 
-	/** The script. */
-	private String script = "/*\n" + " * Script template - to be customized.\n"
-			+ " */\n" + "function check(device) {\n"
-			+ "    //var config = device.get('runningConfig');\n"
-			+ "    //var name = device.get('name');\n" + "    return CONFORMING;\n"
-			+ "    //return NONCONFORMING;\n" + "    //return NOTAPPLICABLE;\n"
-			+ "}\n";
+	/** The allowed results. */
+	private static CheckResult.ResultOption[] ALLOWED_RESULTS = new CheckResult.ResultOption[] {
+		CheckResult.ResultOption.CONFORMING, CheckResult.ResultOption.NONCONFORMING,
+		CheckResult.ResultOption.NOTAPPLICABLE };
 	
-	private static String JSLOADER;
+	private static Source JSLOADER_SOURCE;
 	
 	static {
 		try {
@@ -78,7 +79,7 @@ public class JavaScriptRule extends Rule {
 			while ((line = reader.readLine()) != null) {
 				buffer.append(line + "\n");
 			}
-			JSLOADER = buffer.toString();
+			JSLOADER_SOURCE = Source.create("js", buffer.toString());
 			reader.close();
 			in.close();
 			logger.debug("The JavaScript rule loader code has been read from the resource JS file.");
@@ -91,8 +92,28 @@ public class JavaScriptRule extends Rule {
 			System.exit(1);
 		}
 	}
-	
-	private ScriptEngine engine;
+
+	/** The JS execution engine (for eval caching) */
+	private Engine engine;
+
+	/** The prepared. */
+	private boolean prepared = false;
+
+	/** The js valid. */
+	private boolean jsValid = false;
+
+	/** The script. */
+	private String script = "" +
+			"/*\n" +
+			" * Script template - to be customized.\n" +
+			" */\n" +
+			"function check(device) {\n" +
+			"    //var config = device.get('runningConfig');\n" +
+			"    //var name = device.get('name');\n" +
+			"    return CONFORMING;\n" +
+			"    //return NONCONFORMING;\n" +
+			"    //return NOTAPPLICABLE;\n" +
+			"}\n";
 
 	/**
 	 * Instantiates a new java script rule.
@@ -117,6 +138,7 @@ public class JavaScriptRule extends Rule {
 	 * @return the script
 	 */
 	@XmlElement
+	@JsonView(DefaultView.class)
 	@Column(length = 10000000)
 	public String getScript() {
 		return script;
@@ -131,17 +153,13 @@ public class JavaScriptRule extends Rule {
 		this.script = script;
 	}
 
-
-	/** The allowed results. */
-	private static CheckResult.ResultOption[] ALLOWED_RESULTS = new CheckResult.ResultOption[] {
-		CheckResult.ResultOption.CONFORMING, CheckResult.ResultOption.NONCONFORMING,
-		CheckResult.ResultOption.NOTAPPLICABLE };
-
-	/** The prepared. */
-	private boolean prepared = false;
-
-	/** The js valid. */
-	private boolean jsValid = false;
+	@Transient
+	public Context getContext() {
+		Context context = Context.newBuilder().engine(this.engine).build();
+		context.eval("js", this.script);
+		context.eval(JSLOADER_SOURCE);
+		return context;
+	}
 
 	/**
 	 * Prepare.
@@ -151,26 +169,21 @@ public class JavaScriptRule extends Rule {
 			return;
 		}
 		prepared = true;
+		this.engine = Engine.create();
+		jsValid = false;
 		
 		try {
-			engine = new ScriptEngineManager().getEngineByName("nashorn");
-			engine.eval("delete load, com, edu, java, javafx, javax, org, JavaImporter, Java, loadWithNewGlobal;");
-			engine.eval(script);
-			engine.eval(JSLOADER);
-
-			try {
-				((Invocable) engine).invokeFunction("check");
-				jsValid = true;
-			}
-			catch (NoSuchMethodException e) {
+			Context context = getContext();
+			Value checkFunction = context.getBindings("js").getMember("check");
+			if (checkFunction == null || !checkFunction.canExecute()) {
 				logger.warn("The check function wasn't found in the script");
 				taskLogger.error("The 'check' function couldn't be found in the script.");
 			}
-			catch (Exception e) {
+			else {
 				jsValid = true;
 			}
 		}
-		catch (ScriptException e) {
+		catch (PolyglotException e) {
 			taskLogger.error("Error while evaluating the Javascript script.");
 			logger.warn("Error while evaluating the Javascript script.", e);
 			jsValid = false;
@@ -198,23 +211,30 @@ public class JavaScriptRule extends Rule {
 
 		try {
 			JsDeviceHelper deviceHelper = new JsDeviceHelper(device, session, taskLogger, true);
-			Object result = ((Invocable) engine).invokeFunction("_check", deviceHelper);
-			if (result != null && result instanceof Bindings) {
-				String comment = "";
-				Object jsComment = ((Bindings) result).get("comment");
-				if (jsComment != null && jsComment instanceof String) {
-					comment = (String) jsComment;
+			Context context = this.getContext();
+			Value result = context.getBindings("js").getMember("_check").execute(deviceHelper);
+			String txtResult = null;
+			String comment = "";
+			if (result.isString()) {
+				txtResult = result.asString();
+			}
+			else if (result.hasMembers()) {
+				Value jsComment = result.getMember("comment");
+				if (jsComment != null && jsComment.isString()) {
+					comment = jsComment.asString();
 				}
-				Object jsResult = ((Bindings) result).get("result");
-				for (CheckResult.ResultOption allowedResult : ALLOWED_RESULTS) {
-					if (allowedResult.toString().equals(jsResult)) {
-						taskLogger.info(String.format("The script returned %s (%d), comment '%s'.",
-								allowedResult.toString(), allowedResult.getValue(), comment));
-						this.setCheckResult(device, allowedResult, comment, session);
-						return;
-					}
+				Value jsResult = result.getMember("result");
+				if (jsResult != null && jsResult.isString()) {
+					txtResult = jsResult.asString();
 				}
-				
+			}
+			for (CheckResult.ResultOption allowedResult : ALLOWED_RESULTS) {
+				if (allowedResult.toString().equals(txtResult)) {
+					taskLogger.info(String.format("The script returned %s (%d), comment '%s'.",
+							allowedResult.toString(), allowedResult.getValue(), comment));
+					this.setCheckResult(device, allowedResult, comment, session);
+					return;
+				}
 			}
 		}
 		catch (Exception e) {

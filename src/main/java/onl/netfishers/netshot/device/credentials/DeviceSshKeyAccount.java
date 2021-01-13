@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2016 Sylvain Cadilhac (NetFishers)
+ * Copyright 2013-2021 Sylvain Cadilhac (NetFishers)
  * 
  * This file is part of Netshot.
  * 
@@ -23,7 +23,11 @@ import javax.persistence.Entity;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 
+import com.fasterxml.jackson.annotation.JsonView;
+
 import org.hibernate.annotations.Type;
+
+import onl.netfishers.netshot.rest.RestViews.DefaultView;
 
 /**
  * SSH credentials with a private key.
@@ -51,6 +55,7 @@ public class DeviceSshKeyAccount extends DeviceSshAccount {
 
 	@Column(length = 5000)
 	@XmlElement
+	@JsonView(DefaultView.class)
 	@Type(type = "credentialString")
 	public String getPrivateKey() {
 		return privateKey;
@@ -62,6 +67,7 @@ public class DeviceSshKeyAccount extends DeviceSshAccount {
 	
 	@Column(length = 5000)
 	@XmlElement
+	@JsonView(DefaultView.class)
 	public String getPublicKey() {
 		return publicKey;
 	}
