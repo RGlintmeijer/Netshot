@@ -22,6 +22,8 @@ import javax.persistence.Entity;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
+import javax.persistence.Index;
+import javax.persistence.Table;
 import javax.persistence.Transient;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
@@ -43,10 +45,13 @@ import org.slf4j.LoggerFactory;
  */
 @Entity(name = "\"user\"")
 @XmlRootElement @XmlAccessorType(value = XmlAccessType.NONE)
+@Table(indexes = {
+		@Index(name = "usernameIndex", columnList = "username") 
+})
 public class UiUser implements User {
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(UiUser.class);
+	final private static Logger logger = LoggerFactory.getLogger(UiUser.class);
 
 	/** The max idle time. */
 	public static int MAX_IDLE_TIME;
@@ -58,16 +63,18 @@ public class UiUser implements User {
 	private static BasicPasswordEncryptor passwordEncryptor = new BasicPasswordEncryptor();
 
 	static {
+		int maxIdleTime;
 		try {
-			MAX_IDLE_TIME = Integer.parseInt(Netshot.getConfig("netshot.aaa.maxidletime", "1800"));
-			if (MAX_IDLE_TIME < 30) {
+			maxIdleTime = Integer.parseInt(Netshot.getConfig("netshot.aaa.maxidletime", "1800"));
+			if (maxIdleTime < 30) {
 				throw new IllegalArgumentException();
 			}
 		}
-		catch (Exception e) {
-			MAX_IDLE_TIME = 1800;
-			logger.error("Invalid value for AAA max idle timeout (netshot.aaa.maxidletime), using {}s.", MAX_IDLE_TIME);
+		catch (IllegalArgumentException e) {
+			maxIdleTime = 1800;
+			logger.error("Invalid value for AAA max idle timeout (netshot.aaa.maxidletime), using {}s.", maxIdleTime);
 		}
+		MAX_IDLE_TIME = maxIdleTime;
 	}
 
 
@@ -119,8 +126,7 @@ public class UiUser implements User {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -139,8 +145,7 @@ public class UiUser implements User {
 	 *
 	 * @return true, if is local
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isLocal() {
 		return local;
 	}
@@ -206,9 +211,9 @@ public class UiUser implements User {
 	 *
 	 * @return the username
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@NaturalId(mutable = true)
+	@Override
 	public String getUsername() {
 		return username;
 	}
@@ -236,8 +241,8 @@ public class UiUser implements User {
 	 *
 	 * @return the level
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
+	@Override
 	public int getLevel() {
 		return level;
 	}
@@ -257,8 +262,7 @@ public class UiUser implements User {
 	 *
 	 * @return the server version
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public String getServerVersion() {
 		return serverVersion;
@@ -274,8 +278,7 @@ public class UiUser implements User {
 	}
 
 	@Transient
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public int getMaxIdleTimout() {
 		return UiUser.MAX_IDLE_TIME;
 	}

@@ -52,7 +52,7 @@ import org.slf4j.LoggerFactory;
 public class CheckGroupComplianceTask extends Task {
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(CheckGroupComplianceTask.class);
+	final private static Logger logger = LoggerFactory.getLogger(CheckGroupComplianceTask.class);
 
 	/** The device group. */
 	private DeviceGroup deviceGroup;
@@ -79,8 +79,7 @@ public class CheckGroupComplianceTask extends Task {
 	 * @see onl.netfishers.netshot.work.Task#getTaskDescription()
 	 */
 	@Override
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public String getTaskDescription() {
 		return "Group compliance check";

@@ -24,6 +24,8 @@ import javax.persistence.Entity;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
+import javax.persistence.Index;
+import javax.persistence.Table;
 import javax.persistence.Transient;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
@@ -38,9 +40,12 @@ import onl.netfishers.netshot.rest.RestViews.DefaultView;
 
 @Entity
 @XmlRootElement @XmlAccessorType(value = XmlAccessType.NONE)
+@Table(indexes = {
+		@Index(name = "hashedTokenIndex", columnList = "hashedToken") 
+})
 public class ApiToken implements User {
 
-	private static StandardStringDigester digester;
+	final private static StandardStringDigester digester;
 
 	static {
 		digester = new StandardStringDigester();
@@ -95,8 +100,7 @@ public class ApiToken implements User {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -142,8 +146,8 @@ public class ApiToken implements User {
 	 *
 	 * @return the level
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
+	@Override
 	public int getLevel() {
 		return level;
 	}
@@ -157,8 +161,7 @@ public class ApiToken implements User {
 		this.level = level;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getDescription() {
 		return description;
 	}

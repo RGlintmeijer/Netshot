@@ -58,12 +58,14 @@ import org.slf4j.MarkerFactory;
 public class JavaScriptRule extends Rule {
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(JavaScriptRule.class);
+	final private static Logger logger = LoggerFactory.getLogger(JavaScriptRule.class);
 
 	/** The allowed results. */
 	private static CheckResult.ResultOption[] ALLOWED_RESULTS = new CheckResult.ResultOption[] {
-		CheckResult.ResultOption.CONFORMING, CheckResult.ResultOption.NONCONFORMING,
-		CheckResult.ResultOption.NOTAPPLICABLE };
+		CheckResult.ResultOption.CONFORMING,
+		CheckResult.ResultOption.NONCONFORMING,
+		CheckResult.ResultOption.NOTAPPLICABLE,
+	};
 	
 	private static Source JSLOADER_SOURCE;
 	
@@ -75,9 +77,10 @@ public class JavaScriptRule extends Rule {
 			InputStream in = DeviceDriver.class.getResourceAsStream("/" + path);
 			BufferedReader reader = new BufferedReader(new InputStreamReader(in));
 			StringBuffer buffer = new StringBuffer();
-			String line = null;
+			String line;
 			while ((line = reader.readLine()) != null) {
-				buffer.append(line + "\n");
+				buffer.append(line);
+				buffer.append("\n");
 			}
 			JSLOADER_SOURCE = Source.create("js", buffer.toString());
 			reader.close();
@@ -137,8 +140,7 @@ public class JavaScriptRule extends Rule {
 	 *
 	 * @return the script
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Column(length = 10000000)
 	public String getScript() {
 		return script;

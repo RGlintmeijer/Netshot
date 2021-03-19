@@ -514,6 +514,24 @@ h1 {
 	width: 226px;
 }
 
+#nsdevices-sidewidthdivider {
+	position: absolute;
+	top: 0px;
+	bottom: 0px;
+	left: 265px;
+	width: 4px;
+	padding: 5px 0px 5px 0px;
+	cursor: col-resize;
+}
+
+#nsdevices-sidewidthdividerzone {
+	position: absolute;
+	top: 0px;
+	bottom: 0px;
+	left: 150px;
+	width: 300px;
+}
+
 #nsdevices-sidedivider {
 	position: absolute;
 	top: 115px;
@@ -530,6 +548,10 @@ h1 {
 	left: 5px;
 	bottom: 100px;
 	border: none;
+}
+
+.nssdivider:hover {
+	background-color: #f1f8ff;
 }
 
 #nsdevices-list {
@@ -589,9 +611,6 @@ h1 {
 .nsdevices-list-device .family {
 	display: block;
 	font-size: small;
-}
-
-#nsdevices-header {
 }
 
 #nsdevices-devicetabs #deviceactionbar {
@@ -746,12 +765,13 @@ h1 {
 	font-size: 0.9em;
 	background-color: #ffe3e6;
 	padding: 2px 5px 2px 5px;
+	border-radius: 5px;
 }
 
 .nsdialog .nserror .ui-icon {
 	float: left;
 	margin-right: .3em;
-	margin-top: .2em;
+	margin-top: .1em;
 }
 
 .nsdialog .nsdialog-logo {
@@ -776,7 +796,11 @@ h1 {
 
 .nsicon {
 	display: inline-block;
-	vertical-align: text-top;
+}
+
+.nsicon-container {
+	display: inline-block;
+	vertical-align: middle;
 }
 
 .nstable {
@@ -938,6 +962,10 @@ h1 {
 
 #nstasks-taskstabs {
 	margin-bottom: 10px;
+}
+
+#nstasks-tasks button {
+	font-size: 9px;
 }
 
 .nsdatepicker {
@@ -1663,7 +1691,7 @@ input.spinner {
 	padding-bottom: 5px;
 }
 
-#nsdiagnostics-adddiagnostic-editorfield {
+.nsdiagnostics-adddiagnostic-editorfield {
 	position: absolute;
 	top: 170px;
 	bottom: 15px;
@@ -1671,7 +1699,7 @@ input.spinner {
 	right: 10px;
 }
 
-#nsdiagnostic-adddiagnostic-script {
+.nsdiagnostic-adddiagnostic-script {
 	width: 100%;
 	height: 100%;
 }
@@ -1709,4 +1737,14 @@ input.spinner {
 #nsadmin-apitokenaddform input#token {
 	width: 250px;
 	font-family: monospace;
+}
+
+#nsadmin-webhookaddform #hookurl {
+	width: 300px;
+	font-family: monospace;
+}
+
+#nsadmin-webhookaddform #hooktriggers {
+	padding-left: 10px;
+	margin-top: 5px;
 }

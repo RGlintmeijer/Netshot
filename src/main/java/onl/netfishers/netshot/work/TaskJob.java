@@ -20,7 +20,11 @@ package onl.netfishers.netshot.work;
 
 import onl.netfishers.netshot.Database;
 import onl.netfishers.netshot.TaskManager;
+import onl.netfishers.netshot.hooks.Hook;
+import onl.netfishers.netshot.hooks.HookTrigger;
 import onl.netfishers.netshot.work.Task.Status;
+
+import java.util.List;
 
 import org.hibernate.Session;
 import org.quartz.DisallowConcurrentExecution;
@@ -40,7 +44,7 @@ public class TaskJob implements Job {
 	public static final String NETSHOT_TASK = "Netshot Task";
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(TaskJob.class);
+	final private static Logger logger = LoggerFactory.getLogger(TaskJob.class);
 
 	/**
 	 * Instantiates a new task job.
@@ -121,6 +125,41 @@ public class TaskJob implements Job {
 				logger.error("Error while setting the task {} to FAILED.", id, e1);
 			}
 			throw new JobExecutionException("Unable to save the task.");
+		}
+		finally  {
+			session.close();
+		}
+
+
+		logger.trace("Looking for post-task hooks.");
+		session = Database.getSession();
+		try {
+			task = (Task) session.get(Task.class, id);
+			List<Hook> hooks = session
+				.createQuery("select h from Hook h join h.triggers t where t.type = :postTask and t.item = :taskName", Hook.class)
+				.setParameter("postTask", HookTrigger.TriggerType.POST_TASK)
+				.setParameter("taskName", task.getClass().getSimpleName())
+				.list();
+
+			for (Hook hook : hooks) {
+				logger.trace("Executing post-task hook {}", hook.getName());
+				try {
+					String result = hook.execute(task);
+					logger.info("Result of post-task hook '{}' after task {} is: {}", hook.getName(), task.getId(), result);
+				}
+				catch (Exception e) {
+					logger.warn("Error while executing hook {} after task {}", hook.getName(), task.getId(), e);
+				}
+			}
+		}
+		catch (Exception e) {
+			logger.error("Error while processing hooks after task {}.", id, e);
+			try {
+				session.getTransaction().rollback();
+			}
+			catch (Exception e1) {
+				logger.error("Error during the rollback.", e1);
+			}
 		}
 		finally  {
 			session.close();

@@ -80,6 +80,9 @@ import onl.netfishers.netshot.diagnostic.DiagnosticLongTextResult;
 import onl.netfishers.netshot.diagnostic.DiagnosticNumericResult;
 import onl.netfishers.netshot.diagnostic.DiagnosticResult;
 import onl.netfishers.netshot.diagnostic.DiagnosticTextResult;
+import onl.netfishers.netshot.hooks.Hook;
+import onl.netfishers.netshot.hooks.HookTrigger;
+import onl.netfishers.netshot.hooks.WebHook;
 import onl.netfishers.netshot.work.DebugLog;
 import onl.netfishers.netshot.work.Task;
 import onl.netfishers.netshot.work.tasks.DeviceJsScript;
@@ -149,10 +152,11 @@ public class Database {
 	private static Configuration configuration;
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(Database.class);
+	final private static Logger logger = LoggerFactory.getLogger(Database.class);
 
 	private static class DatabaseInterceptor extends EmptyInterceptor {
 
+		@Override
 		public boolean onFlushDirty(Object entity, Serializable id, Object[] currentState, Object[] previousState,
 				String[] propertyNames, Type[] types) {
 			int indexOf = ArrayUtils.indexOf(propertyNames, "changeDate");
@@ -163,6 +167,7 @@ public class Database {
 			return false;
 		}
 
+		@Override
 		public boolean onSave(Object entity, Serializable id, Object[] state, String[] propertyNames, Type[] types) {
 			int indexOf = ArrayUtils.indexOf(propertyNames, "changeDate");
 			if (indexOf != ArrayUtils.INDEX_NOT_FOUND) {
@@ -482,16 +487,16 @@ public class Database {
 	public static List<Class<?>> listClassesInPackage(String packageName) throws ClassNotFoundException, IOException {
 		String path = packageName.replace('.', '/');
 		Enumeration<URL> resources = ClassLoader.getSystemResources(path);
-		List<String> dirs = new ArrayList<String>();
+		List<String> dirs = new ArrayList<>();
 		while (resources.hasMoreElements()) {
 			URL resource = resources.nextElement();
 			dirs.add(URLDecoder.decode(resource.getFile(), "UTF-8"));
 		}
-		TreeSet<String> classes = new TreeSet<String>();
+		TreeSet<String> classes = new TreeSet<>();
 		for (String directory : dirs) {
 			classes.addAll(findClasses(directory, packageName));
 		}
-		ArrayList<Class<?>> classList = new ArrayList<Class<?>>();
+		ArrayList<Class<?>> classList = new ArrayList<>();
 		for (String clazz : classes) {
 			classList.add(Class.forName(clazz));
 		}
@@ -513,7 +518,7 @@ public class Database {
 	 */
 	private static TreeSet<String> findClasses(String path, String packageName)
 			throws MalformedURLException, IOException {
-		TreeSet<String> classes = new TreeSet<String>();
+		TreeSet<String> classes = new TreeSet<>();
 		if (path.startsWith("file:") && path.contains("!")) {
 			String[] split = path.split("!");
 			URL jar = new URL(split[0]);
@@ -610,9 +615,12 @@ public class Database {
 
 			configuration = new Configuration();
 
-			configuration.setProperty("hibernate.connection.driver_class", getDriverClass())
+			configuration
+					.setProperty("hibernate.connection.driver_class", getDriverClass())
 					.setProperty("hibernate.connection.url", getUrl()).setProperty("hibernate.connection.username", getUsername())
 					.setProperty("hibernate.connection.password", getPassword()).setProperty("hibernate.c3p0.min_size", "5")
+					// Dates/times stored in UTC in the DB, without timezone, up to Java to convert to server local time
+					.setProperty("hibernate.jdbc.time_zone", "UTC")
 					.setProperty("hibernate.c3p0.max_size", "30").setProperty("hibernate.c3p0.timeout", "1800")
 					.setProperty("hibernate.c3p0.max_statements", "50")
 					.setProperty("hibernate.c3p0.unreturnedConnectionTimeout", "1800")
@@ -629,7 +637,7 @@ public class Database {
 
 			configuration.setProperty("factory_class", "org.hibernate.transaction.JDBCTransactionFactory")
 					.setProperty("current_session_context_class", "thread")
-					// .setProperty("hibernate.hbm2ddl.auto", "update") // "update" or ""
+					//.setProperty("hibernate.hbm2ddl.auto", "update") // "update" or "validate" or ""
 					//.setProperty("hibernate.show_sql", "true")
 					.addAnnotatedClass(Device.class)
 					.addAnnotatedClass(DeviceGroup.class).addAnnotatedClass(Config.class).addAnnotatedClass(DeviceAttribute.class)
@@ -654,7 +662,8 @@ public class Database {
 					.addAnnotatedClass(DiagnosticBinaryResult.class).addAnnotatedClass(DiagnosticNumericResult.class)
 					.addAnnotatedClass(DiagnosticLongTextResult.class).addAnnotatedClass(DiagnosticTextResult.class)
 					.addAnnotatedClass(UiUser.class)
-					.addAnnotatedClass(ApiToken.class);
+					.addAnnotatedClass(ApiToken.class)
+					.addAnnotatedClass(Hook.class).addAnnotatedClass(WebHook.class).addAnnotatedClass(HookTrigger.class);
 
 			for (Class<?> clazz : Task.getTaskClasses()) {
 				logger.info("Registering task class " + clazz.getName());

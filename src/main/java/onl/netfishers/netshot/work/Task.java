@@ -57,13 +57,13 @@ import com.fasterxml.jackson.annotation.JsonView;
  * A task.
  */
 @Entity @Inheritance(strategy = InheritanceType.JOINED)
-@XmlRootElement @XmlAccessorType(value = XmlAccessType.NONE)
 @Table(indexes = {
 		@Index(name = "changeDateIndex", columnList = "changeDate"),
 		@Index(name = "creationDateIndex", columnList = "creationDate"),
 		@Index(name = "statusIndex", columnList = "status"),
 		@Index(name = "executionDateIndex", columnList = "executionDate")
 })
+@XmlRootElement @XmlAccessorType(value = XmlAccessType.NONE)
 @JsonTypeInfo(use = JsonTypeInfo.Id.MINIMAL_CLASS, include = JsonTypeInfo.As.PROPERTY, property = "type")
 public abstract class Task implements Cloneable {
 
@@ -71,21 +71,12 @@ public abstract class Task implements Cloneable {
 	 * The Enum ScheduleType.
 	 */
 	public static enum ScheduleType {
-
-		/** The asap. */
 		ASAP,
-
-		/** The at. */
 		AT,
-
-		/** The daily. */
 		DAILY,
-
-		/** The monthly. */
 		MONTHLY,
-
-		/** The weekly. */
-		WEEKLY
+		WEEKLY,
+		HOURLY,
 	}
 
 	/**
@@ -116,7 +107,7 @@ public abstract class Task implements Cloneable {
 	}
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(Task.class);
+	final private static Logger logger = LoggerFactory.getLogger(Task.class);
 
 	/** The Constant TASK_CLASSES. */
 	private static final Set<Class<? extends Task>> TASK_CLASSES;
@@ -177,6 +168,9 @@ public abstract class Task implements Cloneable {
 
 	/** The schedule type. */
 	protected ScheduleType scheduleType = ScheduleType.ASAP;
+
+	/** The factor (to multiply type) */
+	protected int scheduleFactor = 1;
 	
 	/** The status. */
 	protected Status status = Status.NEW;
@@ -235,6 +229,7 @@ public abstract class Task implements Cloneable {
 		Task task = (Task) super.clone();
 		task.setScheduleReference(this.scheduleReference);
 		task.setScheduleType(this.scheduleType);
+		task.setScheduleFactor(this.scheduleFactor);
 		task.setId(0);
 		return task;
 	}
@@ -256,8 +251,7 @@ public abstract class Task implements Cloneable {
 		return true;
 	}
 	
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getAuthor() {
 		return author;
 	}
@@ -267,8 +261,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the change date
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getChangeDate() {
 		return changeDate;
 	}
@@ -278,8 +271,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the comments
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getComments() {
 		return comments;
 	}
@@ -289,8 +281,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the creation date
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getCreationDate() {
 		return creationDate;
 	}
@@ -309,8 +300,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the execution date
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getExecutionDate() {
 		return executionDate;
 	}
@@ -320,8 +310,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the id
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	public long getId() {
@@ -333,8 +322,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the log
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Column(name = "log", length = 10000000)
 	public String getLog() {
 		return log.toString();
@@ -346,51 +334,55 @@ public abstract class Task implements Cloneable {
 	 * @return the next execution date
 	 */
 	@Transient
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getNextExecutionDate() {
 		Calendar reference = Calendar.getInstance();
 		reference.setTime(this.scheduleReference);
-		Calendar target = Calendar.getInstance();
 		Calendar inOneMinute = Calendar.getInstance();
 		inOneMinute.add(Calendar.MINUTE, 1);
+
+		int factor = this.scheduleFactor;
+		if (factor <= 0) {
+			factor = 1;
+		}
+		int unit = 0;
 
 		switch (this.scheduleType) {
 		case AT:
 			return this.scheduleReference;
+		case HOURLY:
+			unit = Calendar.HOUR;
+			break;
 		case DAILY:
-			target.set(Calendar.HOUR_OF_DAY, reference.get(Calendar.HOUR_OF_DAY));
-			target.set(Calendar.MINUTE, reference.get(Calendar.MINUTE));
-			target.set(Calendar.SECOND, reference.get(Calendar.SECOND));
-			target.set(Calendar.MILLISECOND, 0);
-			if (target.before(inOneMinute)) {
-				target.add(Calendar.DAY_OF_MONTH, 1);
-			}
-			return target.getTime();
+			unit = Calendar.DAY_OF_MONTH;
+			break;
 		case WEEKLY:
-			target.set(Calendar.HOUR_OF_DAY, reference.get(Calendar.HOUR_OF_DAY));
-			target.set(Calendar.MINUTE, reference.get(Calendar.MINUTE));
-			target.set(Calendar.SECOND, reference.get(Calendar.SECOND));
-			target.set(Calendar.MILLISECOND, 0);
-			target.set(Calendar.DAY_OF_WEEK, reference.get(Calendar.DAY_OF_WEEK));
-			if (target.before(inOneMinute)) {
-				target.add(Calendar.WEEK_OF_YEAR, 1);
-			}
-			return target.getTime();
+			unit = Calendar.WEEK_OF_YEAR;
+			break;
 		case MONTHLY:
-			target.set(Calendar.HOUR_OF_DAY, reference.get(Calendar.HOUR_OF_DAY));
-			target.set(Calendar.MINUTE, reference.get(Calendar.MINUTE));
-			target.set(Calendar.SECOND, reference.get(Calendar.SECOND));
-			target.set(Calendar.MILLISECOND, 0);
-			target.set(Calendar.DAY_OF_MONTH, reference.get(Calendar.DAY_OF_MONTH));
-			if (target.before(inOneMinute)) {
-				target.add(Calendar.MONTH, 1);
-			}
-			return target.getTime();
+			unit = Calendar.MONTH;
+			break;
 		case ASAP:
 		default:
 			return null;
 		}
+
+		if (unit > 0) {
+			Calendar target = Calendar.getInstance();
+			target.setTime(this.scheduleReference);
+			if (target.get(Calendar.YEAR) < inOneMinute.get(Calendar.YEAR)) {
+				target.set(Calendar.YEAR, inOneMinute.get(Calendar.YEAR) - 1);
+			}
+			for (int i = 0; i < 100000; i++) {
+				if (target.after(inOneMinute)) {
+					return target.getTime();
+				}
+				target.add(unit, factor);
+			}
+			return target.getTime();
+		}
+
+		return null;
 	}
 
 	/**
@@ -398,8 +390,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the schedule reference
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getScheduleReference() {
 		return scheduleReference;
 	}
@@ -409,10 +400,19 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the schedule type
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public ScheduleType getScheduleType() {
 		return scheduleType;
+	}
+
+	/**
+	 * Gets the schedule factor.
+	 * 
+	 * @return the schedule factor
+	 */
+	@XmlElement @JsonView(DefaultView.class)
+	public int getScheduleFactor() {
+		return scheduleFactor;
 	}
 
 	/**
@@ -420,8 +420,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the status
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Status getStatus() {
 		return status;
 	}
@@ -431,8 +430,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the target
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Column(length = 10000)
 	public String getTarget() {
 		return target;
@@ -443,8 +441,7 @@ public abstract class Task implements Cloneable {
 	 *
 	 * @return the task description
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	abstract public String getTaskDescription();
 
@@ -468,8 +465,7 @@ public abstract class Task implements Cloneable {
 	 * Is debug enabled on this task?
 	 * @return true if debug is enabled
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isDebugEnabled() {
 		return debugEnabled;
 	}
@@ -480,8 +476,7 @@ public abstract class Task implements Cloneable {
 	 * @return true, if is repeating
 	 */
 	@Transient
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isRepeating() {
 		switch (this.scheduleType) {
 		case ASAP:
@@ -583,8 +578,9 @@ public abstract class Task implements Cloneable {
 	 * @param reference the date reference
 	 * @param type the type of schedule
 	 */
-	public void schedule(Date reference, ScheduleType type) {
+	public void schedule(Date reference, ScheduleType type, int factor) {
 		this.scheduleType = type;
+		this.scheduleFactor = factor;
 		this.scheduleReference = reference;
 	}
 
@@ -737,6 +733,15 @@ public abstract class Task implements Cloneable {
 	}
 
 	/**
+	 * Sets the schedule factor.
+	 * 
+	 * @param scheduleFactor the new schedule factor
+	 */
+	public void setScheduleFactor(int scheduleFactor) {
+		this.scheduleFactor = scheduleFactor;
+	}
+
+	/**
 	 * Sets the status.
 	 *
 	 * @param status the new status
@@ -767,7 +772,7 @@ public abstract class Task implements Cloneable {
 		return "Task " + id + " (type " + this.getClass().getSimpleName() + ", target '" + target
 				+ "', author '" + author + "', created on " + creationDate
 				+ ", executed on " + executionDate + ", description '" + getTaskDescription()
-				+ "', schedule type " + scheduleType + ")";
+				+ "', schedule type " + scheduleType + "', schedule factor " + scheduleFactor + ")";
 	}
 
 }

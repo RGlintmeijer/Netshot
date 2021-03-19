@@ -12,6 +12,31 @@ Please refer to https://github.com/netfishers-onl/Netshot/wiki
 
 RELEASE HISTORY:
 
+0.16.1 - 2021-02-19
+
+* Fix for IP addresses being rejected
+* Fix for DB schema update
+
+
+0.16.0 - 2021-02-01
+
+* The JavaScript engine is now based on GraalVM
+* Python-based compliance and diagnostic scripts
+* Recurring tasks with multiply factor
+* Post-task Web hooks
+* SSH logger
+* Ciena SAOS driver (first release)
+* Cisco Viptela driver (first release)
+* Cisco IOS-XR driver improvements
+* OpenAPI definition and embedded UI browser
+* Tokens for API access (rather than session-based)
+* Improved API return codes
+* New config options and files for Docker support
+* Underlying library updates
+* UI minor improvements
+* Various fixes
+
+
 0.15.2 - 2020-09-04
 
 * Minor UI improvements/fixes

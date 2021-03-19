@@ -41,8 +41,7 @@ public class ConfigBinaryAttribute extends ConfigAttribute {
 		this.assumption = value;
 	}
 	
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Boolean getAssumption() {
 		return assumption;
 	}
@@ -54,7 +53,7 @@ public class ConfigBinaryAttribute extends ConfigAttribute {
 	@Override
 	@Transient
 	public String getAsText() {
-		if (Boolean.TRUE == assumption) {
+		if (Boolean.TRUE.equals(assumption)) {
 			return "true";
 		}
 		else {

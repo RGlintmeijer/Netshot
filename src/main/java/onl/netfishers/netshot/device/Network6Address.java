@@ -160,10 +160,7 @@ public class Network6Address extends NetworkAddress {
 			return false;
 		}
 		Network6Address other = (Network6Address) obj;
-		if (address1 != other.address1 || address2 != other.address2 || prefixLength != other.prefixLength) {
-			return false;
-		}
-		return true;
+		return (address1 == other.address1) && (address2 == other.address2) && (prefixLength == other.prefixLength);
 	}
 
 	/**
@@ -198,6 +195,7 @@ public class Network6Address extends NetworkAddress {
 	 */
 	@Transient
 	@XmlAttribute
+	@Override
 	public String getIp() {
 		return Network6Address.intToIP(address1, address2);
 	}
@@ -208,6 +206,7 @@ public class Network6Address extends NetworkAddress {
 	 * @return the prefix
 	 */
 	@Transient
+	@Override
 	public String getPrefix() {
 		return getIp() + "/" + prefixLength;
 	}
@@ -218,6 +217,7 @@ public class Network6Address extends NetworkAddress {
 	 * @return the prefix length
 	 */
 	@XmlAttribute
+	@Override
 	public int getPrefixLength() {
 		return prefixLength;
 	}
@@ -265,31 +265,64 @@ public class Network6Address extends NetworkAddress {
 	/* (non-Javadoc)
 	 * @see java.lang.Object#toString()
 	 */
+	@Override
 	public String toString() {
 		return this.getPrefix();
 	}
 
 	private AddressUsage addressUsage = AddressUsage.PRIMARY;
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
+	@Override
 	public AddressUsage getAddressUsage() {
 		return addressUsage;
 	}
 
+	@Override
 	public void setAddressUsage(AddressUsage usage) {
 		this.addressUsage = usage;
 	}
 
 	public boolean contains(Network6Address address) {
 		if (prefixLength <= 64) {
-			return (this.address1 >> (64 - this.prefixLength)) == (address
-					.address1 >> (64 - this.prefixLength));
+			return (this.address1 >>> (64 - this.prefixLength)) == (address
+					.address1 >>> (64 - this.prefixLength));
 		}
 		else {
-			return (this.address1 == address.address1) && (this.address2 >> (64 - this.prefixLength))
-					== (address.address2 >> (64 - this.prefixLength));
+			return (this.address1 == address.address1) && (this.address2 >>> (64 - this.prefixLength))
+					== (address.address2 >>> (64 - this.prefixLength));
 		}
+	}
+
+	/**
+	 * Checks if is multicast.
+	 * 
+	 * @return true, if is multicast
+	 */
+	@Transient
+	public boolean isMulticast() {
+		return ((this.address1 >>> 56) & 0xFF) == 0xFF;
+	}
+
+	/**
+	 * Checks if is multicast.
+	 * 
+	 * @return true, if is multicast
+	 */
+	@Transient
+	public boolean isLinkLocal() {
+		return ((this.address1 >>> 48) & 0xFE80) == 0xFE80;
+	}
+
+
+	/**
+	 * Checks if is normal unicast.
+	 * 
+	 * @return true, if is normal unicast
+	 */
+	@Transient
+	public boolean isGlobalUnicast() {
+		return ((this.address1 >>> 61) & 0b111) == 0b001;
 	}
 
 }

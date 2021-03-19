@@ -63,10 +63,10 @@ public class NetworkInterface {
 	protected String interfaceName;
 	
 	/** The ip4 addresses. */
-	protected Set<Network4Address> ip4Addresses = new HashSet<Network4Address>();
+	protected Set<Network4Address> ip4Addresses = new HashSet<>();
 	
 	/** The ip6 addresses. */
-	protected Set<Network6Address> ip6Addresses = new HashSet<Network6Address>();
+	protected Set<Network6Address> ip6Addresses = new HashSet<>();
 	
 	/** The physical address. */
 	protected PhysicalAddress physicalAddress = new PhysicalAddress(0);
@@ -121,8 +121,7 @@ public class NetworkInterface {
 	 *
 	 * @return the id
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	public long getId() {
@@ -143,8 +142,7 @@ public class NetworkInterface {
 	 *
 	 * @return the interface name
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getInterfaceName() {
 		return interfaceName;
 	}
@@ -164,8 +162,7 @@ public class NetworkInterface {
 	 *
 	 * @return the ip4 addresses
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@ElementCollection(fetch = FetchType.EAGER) @Fetch(FetchMode.SELECT)
 	public Set<Network4Address> getIp4Addresses() {
 		return ip4Addresses;
@@ -176,8 +173,7 @@ public class NetworkInterface {
 	 *
 	 * @return the ip6 addresses
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@ElementCollection(fetch = FetchType.EAGER) @Fetch(FetchMode.SELECT)
 	public Set<Network6Address> getIp6Addresses() {
 		return ip6Addresses;
@@ -190,7 +186,7 @@ public class NetworkInterface {
 	 */
 	@Transient
 	public List<NetworkAddress> getIpAddresses() {
-		List<NetworkAddress> ipAddresses = new ArrayList<NetworkAddress>();
+		List<NetworkAddress> ipAddresses = new ArrayList<>();
 		ipAddresses.addAll(this.getIp4Addresses());
 		ipAddresses.addAll(this.getIp6Addresses());
 		return ipAddresses;
@@ -240,8 +236,7 @@ public class NetworkInterface {
 	 *
 	 * @return the vrf instance
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getVrfInstance() {
 		return vrfInstance;
 	}
@@ -251,8 +246,7 @@ public class NetworkInterface {
 	 *
 	 * @return true, if is enabled
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isEnabled() {
 		return enabled;
 	}
@@ -262,8 +256,7 @@ public class NetworkInterface {
 	 *
 	 * @return true, if is level3
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isLevel3() {
 		return level3;
 	}
@@ -273,8 +266,7 @@ public class NetworkInterface {
 	 *
 	 * @return the mac address
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public String getMacAddress() {
 		return physicalAddress.toString();
@@ -304,8 +296,7 @@ public class NetworkInterface {
 	 *
 	 * @return the virtual device
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getVirtualDevice() {
 		return virtualDevice;
 	}
@@ -324,8 +315,7 @@ public class NetworkInterface {
 	 *
 	 * @return the description
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getDescription() {
 		return description;
 	}
@@ -423,9 +413,7 @@ public class NetworkInterface {
 		if (!(obj instanceof NetworkInterface))
 			return false;
 		NetworkInterface other = (NetworkInterface) obj;
-		if (id != other.id)
-			return false;
-		return true;
+		return id == other.id;
 	}
 	
 }

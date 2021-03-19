@@ -50,7 +50,7 @@ import onl.netfishers.netshot.work.TaskLogger;
 
 public class RunDiagnosticCliScript extends CliScript {
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(RunDiagnosticCliScript.class);
+	final private static Logger logger = LoggerFactory.getLogger(RunDiagnosticCliScript.class);
 	
 	/** The diagnostics to execute. */
 	private List<Diagnostic> diagnostics;
@@ -96,7 +96,7 @@ public class RunDiagnosticCliScript extends CliScript {
 					jsDiagnostics.put(diagnostic.getName(), jsObject);
 				}
 				catch (Exception e1) {
-					logger.error("Error while preparing the diagnostic {} for JS: {}.", diagnostic.getName(), e1);
+					logger.error("Error while preparing the diagnostic {} for JS", diagnostic.getName(), e1);
 					taskLogger.error(String.format("Error while preparing the diagnostic %s for JS: '%s'.",
 							diagnostic.getName(), e1.getMessage()));
 				}

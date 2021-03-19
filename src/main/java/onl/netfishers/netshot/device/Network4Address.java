@@ -263,10 +263,7 @@ public class Network4Address extends NetworkAddress {
 			return false;
 		}
 		Network4Address other = (Network4Address) obj;
-		if (address != other.address || prefixLength != other.prefixLength) {
-			return false;
-		}
-		return true;
+		return (address == other.address) && (prefixLength == other.prefixLength);
 	}
 
 	/**
@@ -284,6 +281,7 @@ public class Network4Address extends NetworkAddress {
 	 * @see onl.netfishers.netshot.device.NetworkAddress#getInetAddress()
 	 */
 	@Transient
+	@Override
 	public InetAddress getInetAddress() {
 		try {
 			return Network4Address.intToInetAddress(this.address);
@@ -310,6 +308,7 @@ public class Network4Address extends NetworkAddress {
 	 */
 	@XmlAttribute
 	@Transient
+	@Override
 	public String getIp() {
 		return intToIP(this.address);
 	}
@@ -320,6 +319,7 @@ public class Network4Address extends NetworkAddress {
 	 * @return the prefix
 	 */
 	@Transient
+	@Override
 	public String getPrefix() {
 		return intToIP(this.address) + "/" + prefixLength;
 	}
@@ -330,6 +330,7 @@ public class Network4Address extends NetworkAddress {
 	 * @return the prefix length
 	 */
 	@XmlAttribute
+	@Override
 	public int getPrefixLength() {
 		return prefixLength;
 	}
@@ -349,7 +350,7 @@ public class Network4Address extends NetworkAddress {
 	}
 
 	/**
-	 * Checks if is broadcast.
+	 * Checks if is broadcast (255.255.255.255).
 	 * 
 	 * @return true, if is broadcast
 	 */
@@ -359,13 +360,26 @@ public class Network4Address extends NetworkAddress {
 	}
 
 	/**
+	 * Checks if is a directed broadcast address.
+	 * 
+	 * @return true, if directed broadcast
+	 */
+	@Transient
+	public boolean isDirectedBroadcast() {
+		if (this.prefixLength > 30 || this.prefixLength == 0) {
+			return false;
+		}
+		return (this.address | Network4Address.prefixLengthToIntAddress(this.getPrefixLength())) == 0xFFFFFFFF;
+	}
+
+	/**
 	 * Checks if is loopback.
 	 * 
 	 * @return true, if is loopback
 	 */
 	@Transient
 	public boolean isLoopback() {
-		return ((this.address >> 24) & 255) == 127;
+		return ((this.address >>> 24) & 255) == 127;
 	}
 
 	/**
@@ -375,7 +389,7 @@ public class Network4Address extends NetworkAddress {
 	 */
 	@Transient
 	public boolean isMulticast() {
-		return ((this.address >> 28) & 31) == 31;
+		return ((this.address >>> 28) & 0b1111) == 0b1110;
 	}
 
 	/**
@@ -386,7 +400,7 @@ public class Network4Address extends NetworkAddress {
 	@Transient
 	public boolean isNormalUnicast() {
 		return (!this.isBroadcast() && !this.isLoopback() && !this.isMulticast() && !this
-				.isUndefined());
+				.isUndefined() && !this.isDirectedBroadcast());
 	}
 
 	/**
@@ -449,18 +463,19 @@ public class Network4Address extends NetworkAddress {
 	 * @return true if the IP is contained within the current subnet
 	 */
 	public boolean contains(Network4Address otherAddress) {
-		return (this.address >> (32 - this.prefixLength)) == (otherAddress
-				.getIntAddress() >> (32 - this.prefixLength));
+		return (this.address >>> (32 - this.prefixLength)) == (otherAddress
+				.getIntAddress() >>> (32 - this.prefixLength));
 	}
 
 	private AddressUsage addressUsage = AddressUsage.PRIMARY;
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
+	@Override
 	public AddressUsage getAddressUsage() {
 		return addressUsage;
 	}
 
+	@Override
 	public void setAddressUsage(AddressUsage usage) {
 		this.addressUsage = usage;
 	}

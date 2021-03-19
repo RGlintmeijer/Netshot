@@ -21,6 +21,7 @@ package onl.netfishers.netshot.rest;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.text.SimpleDateFormat;
@@ -73,6 +74,7 @@ import onl.netfishers.netshot.Netshot;
 import onl.netfishers.netshot.TaskManager;
 import onl.netfishers.netshot.aaa.ApiToken;
 import onl.netfishers.netshot.aaa.Radius;
+import onl.netfishers.netshot.aaa.Tacacs;
 import onl.netfishers.netshot.aaa.UiUser;
 import onl.netfishers.netshot.aaa.User;
 import onl.netfishers.netshot.compliance.CheckResult;
@@ -84,6 +86,7 @@ import onl.netfishers.netshot.compliance.SoftwareRule;
 import onl.netfishers.netshot.compliance.CheckResult.ResultOption;
 import onl.netfishers.netshot.compliance.SoftwareRule.ConformanceLevel;
 import onl.netfishers.netshot.compliance.rules.JavaScriptRule;
+import onl.netfishers.netshot.compliance.rules.PythonRule;
 import onl.netfishers.netshot.compliance.rules.TextRule;
 import onl.netfishers.netshot.device.Config;
 import onl.netfishers.netshot.device.Device;
@@ -114,8 +117,13 @@ import onl.netfishers.netshot.device.credentials.DeviceSshKeyAccount;
 import onl.netfishers.netshot.diagnostic.Diagnostic;
 import onl.netfishers.netshot.diagnostic.DiagnosticResult;
 import onl.netfishers.netshot.diagnostic.JavaScriptDiagnostic;
+import onl.netfishers.netshot.diagnostic.PythonDiagnostic;
 import onl.netfishers.netshot.diagnostic.SimpleDiagnostic;
+import onl.netfishers.netshot.hooks.Hook;
+import onl.netfishers.netshot.hooks.HookTrigger;
+import onl.netfishers.netshot.hooks.WebHook;
 import onl.netfishers.netshot.rest.RestViews.DefaultView;
+import onl.netfishers.netshot.rest.RestViews.RestApiView;
 import onl.netfishers.netshot.work.DebugLog;
 import onl.netfishers.netshot.work.Task;
 import onl.netfishers.netshot.work.TaskLogger;
@@ -177,7 +185,6 @@ import difflib.Delta;
 import difflib.DiffUtils;
 import difflib.Patch;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 
 /**
  * The RestService class exposes the Netshot methods as a REST service.
@@ -264,6 +271,7 @@ public class RestService extends Thread {
 	/* (non-Javadoc)
 	 * @see java.lang.Thread#run()
 	 */
+	@Override
 	public void run() {
 		logger.info("Starting the Web/REST service thread.");
 		try {
@@ -349,8 +357,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the error message
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getErrorMsg() {
 			return errorMsg;
 		}
@@ -369,8 +376,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the error code
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getErrorCode() {
 			return errorCode;
 		}
@@ -388,15 +394,14 @@ public class RestService extends Thread {
 	/**
 	 * Gets the domains.
 	 *
-	 * @param request the request
 	 * @return the domains
 	 * @throws WebApplicationException the web application exception
 	 */
 	@GET
 	@Path("/domains")
-	@ApiResponse()
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the device domains",
 		description = "Returns the list of device domains."
@@ -407,7 +412,7 @@ public class RestService extends Thread {
 		List<Domain> domains;
 		try {
 			domains = session.createQuery("select d from Domain d", Domain.class).list();
-			List<RsDomain> rsDomains = new ArrayList<RsDomain>();
+			List<RsDomain> rsDomains = new ArrayList<>();
 			for (Domain domain : domains) {
 				rsDomains.add(new RsDomain(domain));
 			}
@@ -447,8 +452,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -467,8 +471,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -487,8 +490,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the description
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDescription() {
 			return description;
 		}
@@ -507,8 +509,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the ip address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -546,7 +547,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the domain.
 	 *
-	 * @param request the request
 	 * @param newDomain the new domain
 	 * @return the rs domain
 	 * @throws WebApplicationException the web application exception
@@ -556,6 +556,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a device domain",
 		description = "Creates a device domain."
@@ -614,7 +615,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the domain.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsDomain the rs domain
 	 * @return the rs domain
@@ -625,6 +625,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a device domain",
 		description = "Edits a device domain, by ID."
@@ -693,7 +694,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete a domain.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -701,6 +701,7 @@ public class RestService extends Thread {
 	@Path("/domains/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a device domain",
 		description = "Remove the given device domain, by ID."
@@ -742,7 +743,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device interfaces.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device interfaces
 	 * @throws WebApplicationException the web application exception
@@ -752,6 +752,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/interfaces")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get device interfaces",
 		description = "Returns the list of interfaces of a given device (by ID)."
@@ -785,7 +786,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device modules.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device modules
 	 * @throws WebApplicationException the web application exception
@@ -794,6 +794,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/modules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get device modules",
 		description = "Returns the list of hardware modules of a given device, by ID."
@@ -821,7 +822,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device last n (default 20) tasks.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device tasks
 	 * @throws WebApplicationException the web application exception
@@ -830,6 +830,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/tasks")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get device tasks",
 		description = "Returns the list of tasks of a given device (by ID). Up to 'max' tasks are returned, sorted by status and significant date."
@@ -838,9 +839,13 @@ public class RestService extends Thread {
 			@PathParam("max") @DefaultValue("20") Integer maxCount)
 			throws WebApplicationException {
 		logger.debug("REST request, get device {} tasks.", id);
+		if (maxCount < 1) {
+			throw new NetshotBadRequestException("Invalid max parameter",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_REQUEST_PARAMETER);
+		}
 		Session session = Database.getSession();
 		try {
-			List<Task> tasks = new ArrayList<Task>();
+			List<Task> tasks = new ArrayList<>();
 			tasks.addAll(session.createQuery(
 					"select t from CheckComplianceTask t where t.device.id = :deviceId order by t.changeDate desc", CheckComplianceTask.class)
 					.setParameter("deviceId", id).setMaxResults(maxCount).list());
@@ -904,7 +909,11 @@ public class RestService extends Thread {
 					return statusDiff;
 				}
 			});
-			return tasks.subList(0, (maxCount > tasks.size() ? tasks.size() : maxCount));
+			int max =  tasks.size();
+			if (maxCount != null && maxCount < tasks.size()) {
+				max = maxCount;
+			}
+			return tasks.subList(0, max);
 		}
 		catch (Exception e) {
 			logger.error("Unable to fetch the tasks.", e);
@@ -919,7 +928,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device configs.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device configs
 	 * @throws WebApplicationException the web application exception
@@ -928,6 +936,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/configs")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get device configs",
 		description = "Returns the list of configurations of the given device, by ID."
@@ -956,7 +965,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device config as plain text.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param item the item
 	 * @return the device config plain
@@ -966,6 +974,7 @@ public class RestService extends Thread {
 	@Path("/configs/{id}/{item}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_OCTET_STREAM })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get a device configuration item",
 		description = "Retrieves a device configuration item, in plain text."
@@ -1042,7 +1051,7 @@ public class RestService extends Thread {
 		private Date revisedDate;
 
 		/** The deltas. */
-		private Map<String, List<RsConfigDelta>> deltas = new HashMap<String, List<RsConfigDelta>>();
+		private Map<String, List<RsConfigDelta>> deltas = new HashMap<>();
 
 		/**
 		 * Instantiates a new rs config diff.
@@ -1063,7 +1072,7 @@ public class RestService extends Thread {
 		 */
 		public void addDelta(String item, RsConfigDelta delta) {
 			if (!deltas.containsKey(item)) {
-				deltas.put(item, new ArrayList<RsConfigDelta>());
+				deltas.put(item, new ArrayList<>());
 			}
 			deltas.get(item).add(delta);
 		}
@@ -1073,8 +1082,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the original date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getOriginalDate() {
 			return originalDate;
 		}
@@ -1084,8 +1092,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the revised date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getRevisedDate() {
 			return revisedDate;
 		}
@@ -1095,8 +1102,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the deltas
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Map<String, List<RsConfigDelta>> getDeltas() {
 			return deltas;
 		}
@@ -1182,8 +1188,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the diff type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Type getDiffType() {
 			return diffType;
 		}
@@ -1193,8 +1198,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the original position
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getOriginalPosition() {
 			return originalPosition;
 		}
@@ -1204,8 +1208,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the revised position
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getRevisedPosition() {
 			return revisedPosition;
 		}
@@ -1215,8 +1218,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the original lines
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<String> getOriginalLines() {
 			return originalLines;
 		}
@@ -1226,8 +1228,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the revised lines
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<String> getRevisedLines() {
 			return revisedLines;
 		}
@@ -1237,8 +1238,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the item
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getItem() {
 			return item;
 		}
@@ -1248,8 +1248,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the pre context
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<String> getPreContext() {
 			return preContext;
 		}
@@ -1259,8 +1258,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the post context
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<String> getPostContext() {
 			return postContext;
 		}
@@ -1269,7 +1267,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device config diff.
 	 *
-	 * @param request the request
 	 * @param id1 the id1
 	 * @param id2 the id2
 	 * @return the device config diff
@@ -1278,6 +1275,7 @@ public class RestService extends Thread {
 	@Path("/configs/{id1}/vs/{id2}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the diff between two configuration objects",
 		description = "Retrieves the differences between two given device configuration objets, identified by full IDs."
@@ -1288,8 +1286,8 @@ public class RestService extends Thread {
 				id2);
 		RsConfigDiff configDiffs;
 		Session session = Database.getSession();
-		Config config1 = null;
-		Config config2 = null;
+		Config config1;
+		Config config2;
 		try {
 			config2 = (Config) session.get(Config.class, id2);
 			if (config2 != null && id1 == 0) {
@@ -1361,7 +1359,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device
 	 * @throws WebApplicationException the web application exception
@@ -1370,6 +1367,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get a device",
 		description = "Retrieve a device will all details."
@@ -1437,8 +1435,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -1457,8 +1454,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -1477,8 +1473,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the family
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -1497,8 +1492,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the mgmt address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Network4Address getMgmtAddress() {
 			return mgmtAddress;
 		}
@@ -1517,8 +1511,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the status
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Device.Status getStatus() {
 			return status;
 		}
@@ -1538,7 +1531,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the devices.
 	 *
-	 * @param request the request
 	 * @return the devices
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -1546,6 +1538,7 @@ public class RestService extends Thread {
 	@Path("/devices")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the devices",
 		description = "Retrieves the device list with minimal details."
@@ -1573,7 +1566,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device types.
 	 *
-	 * @param request the request
 	 * @return the device types
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -1581,6 +1573,7 @@ public class RestService extends Thread {
 	@Path("/devicetypes")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the device types",
 		description = "Returns the list of device types (drivers)."
@@ -1595,7 +1588,7 @@ public class RestService extends Thread {
 				logger.error("Error in REST service while refreshing the device types.", e);
 			}
 		}
-		List<DeviceDriver> deviceTypes = new ArrayList<DeviceDriver>();
+		List<DeviceDriver> deviceTypes = new ArrayList<>();
 		deviceTypes.addAll(DeviceDriver.getAllDrivers());
 		return deviceTypes;
 	}
@@ -1613,8 +1606,7 @@ public class RestService extends Thread {
 		/** The device family. */
 		private String deviceFamily;
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -1628,8 +1620,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device family
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDeviceFamily() {
 			return deviceFamily;
 		}
@@ -1647,7 +1638,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device families.
 	 *
-	 * @param request the request
 	 * @return the device families
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -1655,6 +1645,7 @@ public class RestService extends Thread {
 	@Path("/devicefamilies")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the existing device families",
 		description = "Returns the list of device families (driver specific) currenly known in the database."
@@ -1685,8 +1676,7 @@ public class RestService extends Thread {
 	public static class RsPartNumber {
 		private String partNumber;
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -1700,7 +1690,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the known part numbers.
 	 *
-	 * @param request the request
 	 * @return the part numbers
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -1708,6 +1697,7 @@ public class RestService extends Thread {
 	@Path("/partnumbers")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the known part numbers",
 		description = "Returns the list of all known part numbers currently existing in the module table."
@@ -1775,8 +1765,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is auto discover
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isAutoDiscover() {
 			return autoDiscover;
 		}
@@ -1795,8 +1784,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the auto discovery task
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getAutoDiscoveryTask() {
 			return autoDiscoveryTask;
 		}
@@ -1815,8 +1803,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the ip address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -1835,8 +1822,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the domain id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDomainId() {
 			return domainId;
 		}
@@ -1855,8 +1841,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -1875,8 +1860,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDeviceType() {
 			return deviceType;
 		}
@@ -1895,8 +1879,7 @@ public class RestService extends Thread {
 		 * Gets the connect IP address.
 		 * @return the connect IP address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getConnectIpAddress() {
 			return connectIpAddress;
 		}
@@ -1913,8 +1896,7 @@ public class RestService extends Thread {
 		 * Gets the SSH port.
 		 * @return the SSH port
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getSshPort() {
 			return sshPort;
 		}
@@ -1931,8 +1913,7 @@ public class RestService extends Thread {
 		 * Gets the Telnet port.
 		 * @return the Telnet port
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getTelnetPort() {
 			return telnetPort;
 		}
@@ -1949,8 +1930,7 @@ public class RestService extends Thread {
 		 * Gets the device-specific credential set.
 		 * @return the specific credential set
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public DeviceCredentialSet getSpecificCredentialSet() {
 			return specificCredentialSet;
 		}
@@ -1967,7 +1947,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the device.
 	 *
-	 * @param request the request
 	 * @param device the device
 	 * @return the task
 	 * @throws WebApplicationException the web application exception
@@ -1977,6 +1956,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a device",
 		description = "In auto discovery mode, this will create a 'discover device' task, and the device will be create if the discovery is successful." +
@@ -2065,11 +2045,11 @@ public class RestService extends Thread {
 				.setParameter("domain", domain)
 				.setParameter("true", true)
 				.list();
-			if (knownCommunities.size() == 0 && device.isAutoDiscover()) {
+			if (knownCommunities.isEmpty() && device.isAutoDiscover()) {
 				logger.error("No available SNMP community");
 				throw new NetshotBadRequestException(
 						"There is no known SNMP community in the database to poll the device.",
-						NetshotBadRequestException.Reason.NETSHOT_CREDENTIALS_NOTFOUND);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_CREDENTIALS);
 			}
 		}
 		catch (ObjectNotFoundException e) {
@@ -2181,7 +2161,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete device.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -2189,6 +2168,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a device",
 		description = "Remove the given device, by ID."
@@ -2198,7 +2178,7 @@ public class RestService extends Thread {
 		logger.debug("REST request, delete device {}.", id);
 		Session session = Database.getSession();
 		try {
-			List<File> toDeleteFiles = new ArrayList<File>();
+			List<File> toDeleteFiles = new ArrayList<>();
 			List<ConfigBinaryFileAttribute> attributes = session
 					.createQuery("from ConfigBinaryFileAttribute cfa where cfa.config.device.id = :id",
 							ConfigBinaryFileAttribute.class)
@@ -2291,8 +2271,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -2311,8 +2290,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the comments
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getComments() {
 			return comments;
 		}
@@ -2331,8 +2309,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the ip address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getIpAddress() {
 			return ipAddress;
 		}
@@ -2351,8 +2328,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is auto try credentials
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isAutoTryCredentials() {
 			return autoTryCredentials;
 		}
@@ -2371,8 +2347,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the credential set ids
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<Long> getCredentialSetIds() {
 			return credentialSetIds;
 		}
@@ -2398,8 +2373,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is enable
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isEnabled() {
 			return enabled;
 		}
@@ -2417,8 +2391,7 @@ public class RestService extends Thread {
 		 * Gets the management domain.
 		 * @return the management domain
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getMgmtDomain() {
 			return mgmtDomain;
 		}
@@ -2435,8 +2408,7 @@ public class RestService extends Thread {
 		 * Gets the list of credential set IDs.
 		 * @return the list of credential sets
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<Long> getClearCredentialSetIds() {
 			return clearCredentialSetIds;
 		}
@@ -2453,8 +2425,7 @@ public class RestService extends Thread {
 		 * Gets the connect IP address.
 		 * @return the connect IP address
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getConnectIpAddress() {
 			return connectIpAddress;
 		}
@@ -2471,8 +2442,7 @@ public class RestService extends Thread {
 		 * Gets the SSH port.
 		 * @return the SSH port
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getSshPort() {
 			return sshPort;
 		}
@@ -2489,8 +2459,7 @@ public class RestService extends Thread {
 		 * Gets the Telnet port.
 		 * @return the Telnet port
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getTelnetPort() {
 			return telnetPort;
 		}
@@ -2508,8 +2477,7 @@ public class RestService extends Thread {
 		 * Gets the device-specific credential set.
 		 * @return the specific credential set
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public DeviceCredentialSet getSpecificCredentialSet() {
 			return specificCredentialSet;
 		}
@@ -2526,7 +2494,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the device.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsDevice the rs device
 	 * @return the device
@@ -2537,6 +2504,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a device",
 		description = "Edits a device, by ID."
@@ -2730,7 +2698,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the task.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the task
 	 */
@@ -2738,6 +2705,7 @@ public class RestService extends Thread {
 	@Path("/tasks/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get a task.",
 		description = "Retrieves the status of a given task, by ID."
@@ -2768,7 +2736,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the debug log of a task
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param item the item
 	 * @return the device config plain
@@ -2778,6 +2745,7 @@ public class RestService extends Thread {
 	@Path("/tasks/{id}/debuglog")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_OCTET_STREAM })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the debug log of a task",
 		description = "Retrieves the full debug log of a given task, by ID."
@@ -2814,13 +2782,13 @@ public class RestService extends Thread {
 	/**
 	 * Gets the tasks.
 	 *
-	 * @param request the request
 	 * @return the tasks
 	 */
 	@GET
 	@Path("/tasks")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the tasks",
 		description = "Returns the list of tasks. Up to 'max' tasks are returned."
@@ -2848,7 +2816,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the credential sets.
 	 *
-	 * @param request the request
 	 * @return the credential sets
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -2856,6 +2823,7 @@ public class RestService extends Thread {
 	@Path("/credentialsets")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the global credential sets",
 		description = "Returns the list of global credential sets (SSH, SNMP, etc. accounts) for authentication against the devices."
@@ -2892,7 +2860,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete credential set.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -2900,6 +2867,7 @@ public class RestService extends Thread {
 	@Path("/credentialsets/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a credential set",
 		description = "Removes the given credential set, by ID."
@@ -2951,7 +2919,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the credential set.
 	 *
-	 * @param request the request
 	 * @param credentialSet the credential set
 	 * @return the device credential set
 	 * @throws WebApplicationException the web application exception
@@ -2961,6 +2928,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a credential set",
 		description = "Creates a credential set, which then can be used to authenticate against the devices."
@@ -3010,7 +2978,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the credential set.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsCredentialSet the rs credential set
 	 * @return the device credential set
@@ -3021,6 +2988,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a credential set",
 		description = "Edits a credential set, by ID."
@@ -3038,7 +3006,7 @@ public class RestService extends Thread {
 				logger.error("Unable to find the credential set {}.", id);
 				throw new NetshotBadRequestException(
 						"Unable to find the credential set.",
-						NetshotBadRequestException.Reason.NETSHOT_CREDENTIALS_NOTFOUND);
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_CREDENTIALS);
 			}
 			if (!credentialSet.getClass().equals(rsCredentialSet.getClass())) {
 				logger.error("Wrong posted credential type for credential set {}.", id);
@@ -3053,6 +3021,11 @@ public class RestService extends Thread {
 				credentialSet.setMgmtDomain((Domain) session.load(Domain.class, rsCredentialSet.getMgmtDomain().getId()));
 			}
 			credentialSet.setName(rsCredentialSet.getName());
+			if (credentialSet.getName() == null || credentialSet.getName().trim().equals("")) {
+				logger.error("Invalid credential set name.");
+				throw new NetshotBadRequestException("Invalid name for the credential set",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_CREDENTIALS_NAME);
+			}
 			if (DeviceCliAccount.class.isInstance(credentialSet)) {
 				DeviceCliAccount cliAccount = (DeviceCliAccount) credentialSet;
 				DeviceCliAccount rsCliAccount = (DeviceCliAccount) rsCredentialSet;
@@ -3130,8 +3103,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device class name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -3145,8 +3117,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the query
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3179,8 +3150,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the query
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3199,8 +3169,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the devices
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<RsLightDevice> getDevices() {
 			return devices;
 		}
@@ -3218,7 +3187,6 @@ public class RestService extends Thread {
 	/**
 	 * Search devices.
 	 *
-	 * @param request the request
 	 * @param criteria the criteria
 	 * @return the rs search results
 	 * @throws WebApplicationException the web application exception
@@ -3228,6 +3196,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Search for devices",
 		description = "Find devices using a string-based query."
@@ -3275,7 +3244,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the group.
 	 *
-	 * @param request the request
 	 * @param deviceGroup the device group
 	 * @return the device group
 	 * @throws WebApplicationException the web application exception
@@ -3285,6 +3253,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a device group",
 		description = "Creates a device group. A group can be either static (fixed list) or dynamic (query-based list)."
@@ -3330,7 +3299,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the groups.
 	 *
-	 * @param request the request
 	 * @return the groups
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -3338,6 +3306,7 @@ public class RestService extends Thread {
 	@Path("/groups")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the device groups",
 		description = "Returns the list of device groups, including their definition."
@@ -3363,7 +3332,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete group.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -3371,6 +3339,7 @@ public class RestService extends Thread {
 	@Path("/groups/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a device group",
 		description = "Removes a device group. This doesn't remove the devices themselves."
@@ -3422,7 +3391,7 @@ public class RestService extends Thread {
 		private String type;
 
 		/** The static devices. */
-		private List<Long> staticDevices = new ArrayList<Long>();
+		private List<Long> staticDevices = new ArrayList<>();
 
 		/** The device class name. */
 		private String driver;
@@ -3441,8 +3410,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -3468,8 +3436,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -3488,8 +3455,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the static devices
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public List<Long> getStaticDevices() {
 			return staticDevices;
 		}
@@ -3508,8 +3474,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device class name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -3523,8 +3488,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the query
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getQuery() {
 			return query;
 		}
@@ -3538,8 +3502,7 @@ public class RestService extends Thread {
 			this.query = query;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getFolder() {
 			return folder;
 		}
@@ -3548,8 +3511,7 @@ public class RestService extends Thread {
 			this.folder = folder;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isHiddenFromReports() {
 			return hiddenFromReports;
 		}
@@ -3563,7 +3525,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the group.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsGroup the rs group
 	 * @return the device group
@@ -3574,6 +3535,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a device group",
 		description = "Edits a device group, by ID."
@@ -3592,7 +3554,7 @@ public class RestService extends Thread {
 			}
 			if (group instanceof StaticDeviceGroup) {
 				StaticDeviceGroup staticGroup = (StaticDeviceGroup) group;
-				Set<Device> devices = new HashSet<Device>();
+				Set<Device> devices = new HashSet<>();
 				for (Long deviceId : rsGroup.getStaticDevices()) {
 					Device device = (Device) session.load(Device.class, deviceId);
 					devices.add(device);
@@ -3648,7 +3610,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the group devices.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the group devices
 	 * @throws WebApplicationException the web application exception
@@ -3657,6 +3618,7 @@ public class RestService extends Thread {
 	@Path("/devices/group/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get members of a device group",
 		description = "Returns the list of devices which belong to the given group, by ID."
@@ -3731,6 +3693,9 @@ public class RestService extends Thread {
 		/** The schedule type. */
 		private Task.ScheduleType scheduleType = ScheduleType.ASAP;
 
+		/** The schedule factor */
+		private int scheduleFactor = 1;
+
 		/** The comments. */
 		private String comments = "";
 
@@ -3761,8 +3726,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -3782,8 +3746,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is cancelled
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isCancelled() {
 			return cancelled;
 		}
@@ -3802,8 +3765,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -3822,8 +3784,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getGroup() {
 			return group;
 		}
@@ -3842,8 +3803,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getDevice() {
 			return device;
 		}
@@ -3862,8 +3822,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the subnets
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getSubnets() {
 			return subnets;
 		}
@@ -3882,8 +3841,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the schedule reference
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getScheduleReference() {
 			return scheduleReference;
 		}
@@ -3902,8 +3860,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the schedule type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Task.ScheduleType getScheduleType() {
 			return scheduleType;
 		}
@@ -3918,12 +3875,30 @@ public class RestService extends Thread {
 		}
 
 		/**
+		 * Gets the schedule factor.
+		 *
+		 * @return the schedule factor
+		 */
+		@XmlElement @JsonView(DefaultView.class)
+		public int getScheduleFactor() {
+			return scheduleFactor;
+		}
+
+		/**
+		 * Sets the schedule factor.
+		 *
+		 * @param scheduleFactor the new schedule factor
+		 */
+		public void setScheduleFactor(int scheduleFactor) {
+			this.scheduleFactor = scheduleFactor;
+		}
+
+		/**
 		 * Gets the comments.
 		 *
 		 * @return the comments
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getComments() {
 			return comments;
 		}
@@ -3942,8 +3917,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the domain
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getDomain() {
 			return domain;
 		}
@@ -3980,8 +3954,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the limit to outofdate device hours
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getLimitToOutofdateDeviceHours() {
 			return limitToOutofdateDeviceHours;
 		}
@@ -3990,8 +3963,7 @@ public class RestService extends Thread {
 			this.limitToOutofdateDeviceHours = limitToOutofdateDeviceHours;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getDaysToPurge() {
 			return daysToPurge;
 		}
@@ -4000,8 +3972,7 @@ public class RestService extends Thread {
 			this.daysToPurge = days;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -4010,8 +3981,7 @@ public class RestService extends Thread {
 			this.script = script;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -4020,8 +3990,7 @@ public class RestService extends Thread {
 			this.driver = driver;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getConfigDaysToPurge() {
 			return configDaysToPurge;
 		}
@@ -4030,8 +3999,7 @@ public class RestService extends Thread {
 			this.configDaysToPurge = configDaysToPurge;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getConfigSizeToPurge() {
 			return configSizeToPurge;
 		}
@@ -4040,8 +4008,7 @@ public class RestService extends Thread {
 			this.configSizeToPurge = configSizeToPurge;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getConfigKeepDays() {
 			return configKeepDays;
 		}
@@ -4050,8 +4017,7 @@ public class RestService extends Thread {
 			this.configKeepDays = configKeepDays;
 		}
 		
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isDebugEnabled() {
 			return debugEnabled;
 		}
@@ -4060,8 +4026,7 @@ public class RestService extends Thread {
 			this.debugEnabled = debugEnabled;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isDontRunDiagnostics() {
 			return dontRunDiagnostics;
 		}
@@ -4070,8 +4035,7 @@ public class RestService extends Thread {
 			this.dontRunDiagnostics = dontRunDiagnostics;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isDontCheckCompliance() {
 			return dontCheckCompliance;
 		}
@@ -4085,7 +4049,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the task.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsTask the rs task
 	 * @return the task
@@ -4096,6 +4059,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a task",
 		description = "Edits a task, by ID. Set 'cancel' property to true to cancel the task."
@@ -4164,8 +4128,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the status
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getStatus() {
 			return status;
 		}
@@ -4184,8 +4147,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the day
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getDay() {
 			return day;
 		}
@@ -4203,7 +4165,6 @@ public class RestService extends Thread {
 	/**
 	 * Search tasks.
 	 *
-	 * @param request the request
 	 * @param criteria the criteria
 	 * @return the list
 	 * @throws WebApplicationException the web application exception
@@ -4213,6 +4174,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Search for tasks",
 		description = "Retrieves a list of tasks based on passed criteria."
@@ -4225,7 +4187,7 @@ public class RestService extends Thread {
 		Session session = Database.getSession();
 		try {
 			StringBuilder hqlQuery = new StringBuilder("select t from Task t where (1 = 1)");
-			Map<String, Object> hqlParams = new HashMap<String, Object>();
+			Map<String, Object> hqlParams = new HashMap<>();
 			
 			Task.Status status = null;
 			try {
@@ -4288,7 +4250,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the task.
 	 *
-	 * @param request the request
 	 * @param rsTask the rs task
 	 * @return the task
 	 * @throws WebApplicationException the web application exception
@@ -4298,6 +4259,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a task",
 		description = "Creates a task and schedule it for execution."
@@ -4522,7 +4484,7 @@ public class RestService extends Thread {
 		}
 		else if (rsTask.getType().equals("ScanSubnetsTask")) {
 			logger.trace("Adding a ScanSubnetsTask");
-			Set<Network4Address> subnets = new HashSet<Network4Address>();
+			Set<Network4Address> subnets = new HashSet<>();
 			String[] rsSubnets = rsTask.getSubnets().split("(\r\n|\n|;| |,)");
 			Pattern pattern = Pattern.compile("^(?<ip>[0-9\\.]+)(/(?<mask>[0-9]+))?$");
 			for (String rsSubnet : rsSubnets) {
@@ -4553,7 +4515,7 @@ public class RestService extends Thread {
 							NetshotBadRequestException.Reason.NETSHOT_SCAN_SUBNET_TOO_BIG);
 				}
 			}
-			if (subnets.size() == 0) {
+			if (subnets.isEmpty()) {
 				logger.warn("User posted an invalid subnet list '{}'.", rsTask.getSubnets());
 				throw new NetshotBadRequestException(String.format("Invalid subnet list '%s'.", rsTask.getSubnets()),
 						NetshotBadRequestException.Reason.NETSHOT_INVALID_SUBNET);
@@ -4576,7 +4538,7 @@ public class RestService extends Thread {
 			finally {
 				session.close();
 			}
-			StringBuffer target = new StringBuffer();
+			StringBuilder target = new StringBuilder();
 			target.append("{");
 			for (Network4Address subnet : subnets) {
 				if (target.length() > 1) {
@@ -4657,18 +4619,24 @@ public class RestService extends Thread {
 			task.setDebugEnabled(rsTask.isDebugEnabled());
 			task.setScheduleReference(rsTask.getScheduleReference());
 			task.setScheduleType(rsTask.getScheduleType());
+			task.setScheduleFactor(rsTask.getScheduleFactor());
 			if (task.getScheduleType() == ScheduleType.AT) {
 				Calendar inOneMinute = Calendar.getInstance();
 				inOneMinute.add(Calendar.MINUTE, 1);
 				if (task.getScheduleReference().before(inOneMinute.getTime())) {
-					logger
-					.error(
+					logger.error(
 							"The schedule for the task occurs in less than one minute ({} vs {}).",
 							task.getScheduleReference(), inOneMinute.getTime());
 					throw new NetshotBadRequestException(
 							"The schedule occurs in the past.",
 							NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 				}
+			}
+			else if (task.getScheduleFactor() < 1) {
+				logger.error("The repeating factor {} is invalid.", task.getScheduleFactor());
+				throw new NetshotBadRequestException(
+						"The repeating factor is invalid.",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_TASK);
 			}
 		}
 		try {
@@ -4723,8 +4691,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDeviceName() {
 			return deviceName;
 		}
@@ -4743,8 +4710,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDeviceId() {
 			return deviceId;
 		}
@@ -4763,8 +4729,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the author
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getAuthor() {
 			return author;
 		}
@@ -4783,8 +4748,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the old change date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getOldChangeDate() {
 			return oldChangeDate;
 		}
@@ -4803,8 +4767,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the new change date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getNewChangeDate() {
 			return newChangeDate;
 		}
@@ -4823,8 +4786,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the old id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getOldId() {
 			return oldId;
 		}
@@ -4843,8 +4805,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the new id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getNewId() {
 			return newId;
 		}
@@ -4888,8 +4849,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the from date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getFromDate() {
 			return fromDate;
 		}
@@ -4908,8 +4868,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the to date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getToDate() {
 			return toDate;
 		}
@@ -4927,7 +4886,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the changes.
 	 *
-	 * @param request the request
 	 * @param criteria the criteria
 	 * @return the changes
 	 * @throws WebApplicationException the web application exception
@@ -4937,6 +4895,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get last configuration changes",
 		description = "Retrieves the list of last configuration changes, based on passed criteria."
@@ -4968,7 +4927,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the policies.
 	 *
-	 * @param request the request
 	 * @return the policies
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -4976,6 +4934,7 @@ public class RestService extends Thread {
 	@Path("/policies")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the compliance policies",
 		description = "Returns the list of compliance policies."
@@ -5002,7 +4961,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the policy rules.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the policy rules
 	 * @throws WebApplicationException the web application exception
@@ -5011,6 +4969,7 @@ public class RestService extends Thread {
 	@Path("/rules/policy/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the compliance rules of a policy",
 		description = "Returns the rules owned by a given compliance policy."
@@ -5025,7 +4984,7 @@ public class RestService extends Thread {
 				throw new NetshotBadRequestException("Invalid policy",
 						NetshotBadRequestException.Reason.NETSHOT_INVALID_POLICY);
 			}
-			List<Rule> rules = new ArrayList<Rule>();
+			List<Rule> rules = new ArrayList<>();
 			rules.addAll(policy.getRules());
 			return rules;
 		}
@@ -5067,8 +5026,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -5087,8 +5045,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -5107,8 +5064,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -5126,7 +5082,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the policy.
 	 *
-	 * @param request the request
 	 * @param rsPolicy the rs policy
 	 * @return the policy
 	 * @throws WebApplicationException the web application exception
@@ -5136,6 +5091,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a compliance policy",
 		description = "Creates a compliance policy."
@@ -5155,7 +5111,7 @@ public class RestService extends Thread {
 
 			DeviceGroup group = null;
 			if (rsPolicy.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsPolicy.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsPolicy.getGroup());
 			}
 
 			policy = new Policy(name, group);
@@ -5194,7 +5150,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete policy.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -5202,6 +5157,7 @@ public class RestService extends Thread {
 	@Path("/policies/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a compliance policy",
 		description = "Removes a given compliance policy, by ID"
@@ -5238,7 +5194,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the policy.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsPolicy the rs policy
 	 * @return the policy
@@ -5249,6 +5204,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a compliance policy",
 		description = "Edits a compliance policy, by ID."
@@ -5275,13 +5231,13 @@ public class RestService extends Thread {
 			policy.setName(name);
 			
 			if (policy.getTargetGroup() != null && policy.getTargetGroup().getId() != rsPolicy.getGroup()) {
-				session.createQuery("delete CheckResult cr where cr.key.rule in (select r from Rule r where r.policy = :id)")
+				session.createQuery("delete CheckResult cr where cr.key.rule in (select r from Rule r where r.policy.id = :id)")
 					.setParameter("id", policy.getId())
 					.executeUpdate();
 			}
 			DeviceGroup group = null;
 			if (rsPolicy.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsPolicy.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsPolicy.getGroup());
 			}
 			policy.setTargetGroup(group);
 
@@ -5346,7 +5302,7 @@ public class RestService extends Thread {
 		private boolean enabled = false;
 
 		/** The exemptions. */
-		private Map<Long, Date> exemptions = new HashMap<Long, Date>();
+		private Map<Long, Date> exemptions = new HashMap<>();
 		
 		private String text = null;
 		private Boolean regExp;
@@ -5363,8 +5319,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getId() {
 			return id;
 		}
@@ -5383,8 +5338,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -5399,8 +5353,7 @@ public class RestService extends Thread {
 		}
 		
 		
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -5414,8 +5367,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the script
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -5434,8 +5386,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the policy
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getPolicy() {
 			return policy;
 		}
@@ -5445,8 +5396,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is enabled
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isEnabled() {
 			return enabled;
 		}
@@ -5474,8 +5424,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the exemptions
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Map<Long, Date> getExemptions() {
 			return exemptions;
 		}
@@ -5489,8 +5438,7 @@ public class RestService extends Thread {
 			this.exemptions = exemptions;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getText() {
 			return text;
 		}
@@ -5499,8 +5447,7 @@ public class RestService extends Thread {
 			this.text = text;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isRegExp() {
 			return regExp;
 		}
@@ -5509,8 +5456,7 @@ public class RestService extends Thread {
 			this.regExp = regExp;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getContext() {
 			return context;
 		}
@@ -5519,8 +5465,7 @@ public class RestService extends Thread {
 			this.context = context;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getField() {
 			return field;
 		}
@@ -5529,8 +5474,7 @@ public class RestService extends Thread {
 			this.field = field;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -5539,8 +5483,7 @@ public class RestService extends Thread {
 			this.driver = driver;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isInvert() {
 			return invert;
 		}
@@ -5549,8 +5492,7 @@ public class RestService extends Thread {
 			this.invert = invert;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isAnyBlock() {
 			return anyBlock;
 		}
@@ -5559,8 +5501,7 @@ public class RestService extends Thread {
 			this.anyBlock = anyBlock;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isMatchAll() {
 			return matchAll;
 		}
@@ -5569,8 +5510,7 @@ public class RestService extends Thread {
 			this.matchAll = matchAll;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Boolean isNormalize() {
 			return normalize;
 		}
@@ -5583,7 +5523,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the js rule.
 	 *
-	 * @param request the request
 	 * @param rsRule the rs rule
 	 * @return the rule
 	 * @throws WebApplicationException the web application exception
@@ -5593,6 +5532,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a compliance rule",
 		description = "Creates a compliance rule. The associated policy must already exist."
@@ -5616,8 +5556,16 @@ public class RestService extends Thread {
 			if (".TextRule".equals(rsRule.getType())) {
 				rule = new TextRule(name, policy);
 			}
-			else {
+			else if (".JavaScriptRule".equals(rsRule.getType())) {
 				rule = new JavaScriptRule(name, policy);
+			}
+			else if (".PythonRule".equals(rsRule.getType())) {
+				rule = new PythonRule(name, policy);
+			}
+			else {
+				throw new NetshotBadRequestException(
+					"Invalid rule type.",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
 			}
 
 			session.save(rule);
@@ -5646,6 +5594,11 @@ public class RestService extends Thread {
 					"Unable to add the rule to the database",
 					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
 		}
+		catch (NetshotBadRequestException e) {
+			session.getTransaction().rollback();
+			logger.error("Error while saving the new rule.", e);
+			throw e;
+		}
 		finally {
 			session.close();
 		}
@@ -5654,7 +5607,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsRule the rs rule
 	 * @return the rule
@@ -5665,6 +5617,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a compliance rule",
 		description = "Edits a compliance rule, by ID."
@@ -5693,7 +5646,7 @@ public class RestService extends Thread {
 			}
 			rule.setEnabled(rsRule.isEnabled());
 
-			Map<Long, Date> postedExemptions = new HashMap<Long, Date>();
+			Map<Long, Date> postedExemptions = new HashMap<>();
 			postedExemptions.putAll(rsRule.getExemptions());
 			Iterator<Exemption> i = rule.getExemptions().iterator();
 			while (i.hasNext()) {
@@ -5717,6 +5670,12 @@ public class RestService extends Thread {
 				if (rsRule.getScript() != null) {
 					String script = rsRule.getScript().trim();
 					((JavaScriptRule) rule).setScript(script);
+				}
+			}
+			else if (rule instanceof PythonRule) {
+				if (rsRule.getScript() != null) {
+					String script = rsRule.getScript().trim();
+					((PythonRule) rule).setScript(script);
 				}
 			}
 			else if (rule instanceof TextRule) {
@@ -5779,7 +5738,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -5787,6 +5745,7 @@ public class RestService extends Thread {
 	@Path("/rules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a compliance rule",
 		description = "Removes a compliance rule, by ID."
@@ -5835,8 +5794,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDevice() {
 			return device;
 		}
@@ -5871,8 +5829,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the result
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public CheckResult.ResultOption getResult() {
 			return result;
 		}
@@ -5891,8 +5848,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the script error
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getScriptError() {
 			return scriptError;
 		}
@@ -5911,7 +5867,6 @@ public class RestService extends Thread {
 	/**
 	 * Test rule.
 	 *
-	 * @param request the request
 	 * @param rsRule the rs rule
 	 * @return the rule test result
 	 * @throws WebApplicationException the web application exception
@@ -5921,6 +5876,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Test a compliance rule",
 		description = "Test a compliance rule against a given device, in dry run mode."
@@ -5954,15 +5910,25 @@ public class RestService extends Thread {
 				txRule.setNormalize(rsRule.isNormalize());
 				rule = txRule;
 			}
-			else {
+			else if (".rules.JavaScriptRule".equals(rsRule.getType())) {
 				JavaScriptRule jsRule = new JavaScriptRule("TEST", null);
 				jsRule.setScript(rsRule.getScript());
 				rule = jsRule;
 			}
+			else if (".rules.PythonRule".equals(rsRule.getType())) {
+				PythonRule pyRule = new PythonRule("TEST", null);
+				pyRule.setScript(rsRule.getScript());
+				rule = pyRule;
+			}
+			else {
+				logger.warn("Invalid rule type {}.", rsRule.getType());
+				throw new NetshotBadRequestException("Invalid rule type",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_RULE);
+			}
 
 			RsRuleTestResult result = new RsRuleTestResult();
 
-			StringBuffer log = new StringBuffer();
+			StringBuilder log = new StringBuilder();
 			TaskLogger taskLogger = new TaskLogger() {
 			
 				@Override
@@ -6027,8 +5993,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the expiration date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getExpirationDate() {
 			return expirationDate;
 		}
@@ -6047,7 +6012,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the exempted devices.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the exempted devices
 	 * @throws WebApplicationException the web application exception
@@ -6056,6 +6020,7 @@ public class RestService extends Thread {
 	@Path("/devices/rule/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the exempted devices of a compliance rule",
 		description = "Returns the list of devices which have an exemption against a given compliance rule, by ID."
@@ -6116,8 +6081,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Long getId() {
 			return id;
 		}
@@ -6136,8 +6100,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the rule name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getRuleName() {
 			return ruleName;
 		}
@@ -6156,8 +6119,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the policy name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPolicyName() {
 			return policyName;
 		}
@@ -6176,8 +6138,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the result
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public CheckResult.ResultOption getResult() {
 			return result;
 		}
@@ -6196,8 +6157,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the check date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getCheckDate() {
 			return checkDate;
 		}
@@ -6216,8 +6176,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the expiration date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getExpirationDate() {
 			return expirationDate;
 		}
@@ -6236,8 +6195,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the comment
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getComment() {
 			return comment;
 		}
@@ -6256,7 +6214,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device compliance results.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device compliance
 	 * @throws WebApplicationException the web application exception
@@ -6265,6 +6222,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/complianceresults")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the compliance results for a device",
 		description = "Returns the compliance results for a give device, by ID."
@@ -6316,8 +6274,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the change count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getChangeCount() {
 			return changeCount;
 		}
@@ -6336,8 +6293,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the change day
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getChangeDay() {
 			return changeDay;
 		}
@@ -6357,7 +6313,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the last7 days changes by day stats.
 	 *
-	 * @param request the request
 	 * @return the last7 days changes by day stats
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -6365,6 +6320,7 @@ public class RestService extends Thread {
 	@Path("/reports/last7dayschangesbyday")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the number of configuration changes for the last 7 days",
 		description = "Returns the number of device configuration changes per day, for the last 7 days."
@@ -6386,7 +6342,7 @@ public class RestService extends Thread {
 		today.set(Calendar.SECOND, 0);
 		today.set(Calendar.MILLISECOND, 0);
 		try {
-			List<RsConfigChangeNumberByDateStat> stats = new ArrayList<RsConfigChangeNumberByDateStat>();
+			List<RsConfigChangeNumberByDateStat> stats = new ArrayList<>();
 			for (int d = 7; d > 0; d--) {
 				Calendar dayStart = (Calendar)today.clone();
 				Calendar dayEnd = (Calendar)today.clone();
@@ -6438,8 +6394,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGroupId() {
 			return groupId;
 		}
@@ -6458,8 +6413,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getGroupName() {
 			return groupName;
 		}
@@ -6478,8 +6432,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group folder
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getGroupFolder() {
 			return groupFolder;
 		}
@@ -6498,8 +6451,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the compliant device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getCompliantDeviceCount() {
 			return compliantDeviceCount;
 		}
@@ -6518,8 +6470,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6537,7 +6488,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the group config compliance stats.
 	 *
-	 * @param request the request
 	 * @return the group config compliance stats
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -6545,6 +6495,7 @@ public class RestService extends Thread {
 	@Path("/reports/groupconfigcompliancestats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the compliance status of a device group",
 		description = "Returns the compliance status of a given device group, by ID."
@@ -6608,16 +6559,14 @@ public class RestService extends Thread {
 		private Date eoxDate;
 		private long deviceCount;
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getEoxDate() {
 			return eoxDate;
 		}
 		public void setEoxDate(Date date) {
 			this.eoxDate = date;
 		}
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6641,6 +6590,7 @@ public class RestService extends Thread {
 	@Path("/reports/hardwaresupportstats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the global hardware support status",
 		description = "Returns the global hardware support status, i.e. a list of End-of-Life and End-of-Sale dates with the corresponding device count."
@@ -6661,7 +6611,7 @@ public class RestService extends Thread {
 				.setParameter("enabled", Device.Status.INPRODUCTION)
 				.setResultTransformer(Transformers.aliasToBean(RsHardwareSupportEoLStat.class))
 				.list();
-			List<RsHardwareSupportStat> stats = new ArrayList<RsHardwareSupportStat>();
+			List<RsHardwareSupportStat> stats = new ArrayList<>();
 			stats.addAll(eosStats);
 			stats.addAll(eolStats);
 			return stats;
@@ -6706,8 +6656,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGroupId() {
 			return groupId;
 		}
@@ -6726,8 +6675,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getGroupName() {
 			return groupName;
 		}
@@ -6746,8 +6694,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the gold device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGoldDeviceCount() {
 			return goldDeviceCount;
 		}
@@ -6766,8 +6713,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the silver device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getSilverDeviceCount() {
 			return silverDeviceCount;
 		}
@@ -6786,8 +6732,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the bronze device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getBronzeDeviceCount() {
 			return bronzeDeviceCount;
 		}
@@ -6806,8 +6751,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device count
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getDeviceCount() {
 			return deviceCount;
 		}
@@ -6825,7 +6769,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the group software compliance stats.
 	 *
-	 * @param request the request
 	 * @return the group software compliance stats
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -6833,6 +6776,7 @@ public class RestService extends Thread {
 	@Path("/reports/groupsoftwarecompliancestats")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the global software compliance status",
 		description = "Returns the software compliance status of devices, optionally filtered by a list of device domains."
@@ -6899,8 +6843,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the rule name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getRuleName() {
 			return ruleName;
 		}
@@ -6910,8 +6853,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the policy name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPolicyName() {
 			return policyName;
 		}
@@ -6921,8 +6863,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the check date
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getCheckDate() {
 			return checkDate;
 		}
@@ -6932,8 +6873,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the result
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public ResultOption getResult() {
 			return result;
 		}
@@ -6979,7 +6919,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the configuration compliance results.
 	 *
-	 * @param request the request
 	 * @param domains optional filter on device domain
 	 * @param groups optional filter on device groups
 	 * @param policies optional filter on compliance policy
@@ -6991,6 +6930,7 @@ public class RestService extends Thread {
 	@Path("/reports/configcompliancedevicestatuses")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the configuration compliance status of devices",
 		description = "Returns the configuration compliance status of devices; optionally filtered by domain, group, policy or compliance level."
@@ -7055,7 +6995,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the group config non compliant devices.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the group config non compliant devices
 	 * @throws WebApplicationException the web application exception
@@ -7064,6 +7003,7 @@ public class RestService extends Thread {
 	@Path("/reports/groupconfignoncompliantdevices/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the non compliant devices of a group",
 		description = "Returns the list of non-compliance devices part of a given group, optionally filtered by domains and policies"
@@ -7115,6 +7055,7 @@ public class RestService extends Thread {
 	@Path("/reports/hardwaresupportdevices/{type}/{date}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the End-of-Life or End-of-Sale devices matching a date.",
 		description = "Returns the list of devices getting End-of-Life (type 'eol') or End-of-Sale (type 'eos') at the given date (or never if 'date' is not given)."
@@ -7162,7 +7103,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the hardware rules.
 	 *
-	 * @param request the request
 	 * @return the harware rules
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -7170,6 +7110,7 @@ public class RestService extends Thread {
 	@Path("/hardwarerules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the hardware compliance rules",
 		description = "Returns the list of hardware compliance rules."
@@ -7222,8 +7163,7 @@ public class RestService extends Thread {
 
 		private Date endOfLife = null;
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -7232,8 +7172,7 @@ public class RestService extends Thread {
 			this.id = id;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -7242,8 +7181,7 @@ public class RestService extends Thread {
 			this.group = group;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -7252,8 +7190,7 @@ public class RestService extends Thread {
 			this.driver = driver;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -7262,8 +7199,7 @@ public class RestService extends Thread {
 			this.partNumber = partNumber;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isPartNumberRegExp() {
 			return partNumberRegExp;
 		}
@@ -7272,8 +7208,7 @@ public class RestService extends Thread {
 			this.partNumberRegExp = partNumberRegExp;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -7282,8 +7217,7 @@ public class RestService extends Thread {
 			this.family = family;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isFamilyRegExp() {
 			return familyRegExp;
 		}
@@ -7316,7 +7250,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds an hardware rule.
 	 *
-	 * @param request the request
 	 * @param rsRule the rs rule
 	 * @return the hardware rule
 	 * @throws WebApplicationException the web application exception
@@ -7326,6 +7259,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add an hardware compliance rule",
 		description = "Creates an hardware compliance rule."
@@ -7340,7 +7274,7 @@ public class RestService extends Thread {
 
 			DeviceGroup group = null;
 			if (rsRule.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsRule.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsRule.getGroup());
 			}
 
 			String driver = rsRule.getDriver(); 
@@ -7381,7 +7315,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete hardware rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -7389,6 +7322,7 @@ public class RestService extends Thread {
 	@Path("/hardwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove an hardware compliance rule",
 		description = "Removes an hardware compliance rule, by ID."
@@ -7426,7 +7360,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the hardware rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsRule the rs rule
 	 * @return the hardware rule
@@ -7437,6 +7370,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update an hardware compliance rule",
 		description = "Edits an hardware compliance rule, by ID."
@@ -7462,7 +7396,7 @@ public class RestService extends Thread {
 
 			DeviceGroup group = null;
 			if (rsRule.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsRule.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsRule.getGroup());
 			}
 			rule.setTargetGroup(group);
 
@@ -7497,7 +7431,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the software rules.
 	 *
-	 * @param request the request
 	 * @return the software rules
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -7505,6 +7438,7 @@ public class RestService extends Thread {
 	@Path("/softwarerules")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the software compliance rules",
 		description = "Returns the list of software compliance rules."
@@ -7569,8 +7503,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -7589,8 +7522,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the group
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getGroup() {
 			return group;
 		}
@@ -7609,8 +7541,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the device class name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDriver() {
 			return driver;
 		}
@@ -7624,8 +7555,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the version
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getVersion() {
 			return version;
 		}
@@ -7644,8 +7574,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the family
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getFamily() {
 			return family;
 		}
@@ -7664,8 +7593,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the level
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public SoftwareRule.ConformanceLevel getLevel() {
 			return level;
 		}
@@ -7684,8 +7612,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the priority
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public double getPriority() {
 			return priority;
 		}
@@ -7699,8 +7626,7 @@ public class RestService extends Thread {
 			this.priority = priority;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isVersionRegExp() {
 			return versionRegExp;
 		}
@@ -7709,8 +7635,7 @@ public class RestService extends Thread {
 			this.versionRegExp = versionRegExp;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isFamilyRegExp() {
 			return familyRegExp;
 		}
@@ -7719,8 +7644,7 @@ public class RestService extends Thread {
 			this.familyRegExp = familyRegExp;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPartNumber() {
 			return partNumber;
 		}
@@ -7729,8 +7653,7 @@ public class RestService extends Thread {
 			this.partNumber = partNumber;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isPartNumberRegExp() {
 			return partNumberRegExp;
 		}
@@ -7743,7 +7666,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the software rule.
 	 *
-	 * @param request the request
 	 * @param rsRule the rs rule
 	 * @return the software rule
 	 * @throws WebApplicationException the web application exception
@@ -7753,6 +7675,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a software compliance rule",
 		description = "Creates a software compliance rule."
@@ -7767,7 +7690,7 @@ public class RestService extends Thread {
 
 			DeviceGroup group = null;
 			if (rsRule.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsRule.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsRule.getGroup());
 			}
 			
 			String driver = rsRule.getDriver(); 
@@ -7808,7 +7731,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete software rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -7816,6 +7738,7 @@ public class RestService extends Thread {
 	@Path("/softwarerules/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a software compliance rule",
 		description = "Removes a software compliance rule, by ID"
@@ -7853,7 +7776,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the software rule.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsRule the rs rule
 	 * @return the software rule
@@ -7864,6 +7786,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a software compliance rule",
 		description = "Edits a software compliance rule."
@@ -7889,7 +7812,7 @@ public class RestService extends Thread {
 
 			DeviceGroup group = null;
 			if (rsRule.getGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsRule.getGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsRule.getGroup());
 			}
 			rule.setTargetGroup(group);
 
@@ -7937,8 +7860,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the software level
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public ConformanceLevel getSoftwareLevel() {
 			return softwareLevel;
 		}
@@ -7956,7 +7878,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the group devices by software level.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param level the level
 	 * @return the group devices by software level
@@ -7966,6 +7887,7 @@ public class RestService extends Thread {
 	@Path("/reports/groupdevicesbysoftwarelevel/{id}/{level}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the devices of a group based on software compliance level",
 		description = "Returns the list of devices of a given group by ID, and matching the given software compliance level."
@@ -8024,8 +7946,7 @@ public class RestService extends Thread {
 		
 		private Date lastFailure;
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getLastSuccess() {
 			return lastSuccess;
 		}
@@ -8034,8 +7955,7 @@ public class RestService extends Thread {
 			this.lastSuccess = lastSuccess;
 		}
 
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public Date getLastFailure() {
 			return lastFailure;
 		}
@@ -8049,6 +7969,7 @@ public class RestService extends Thread {
 	@Path("/reports/accessfailuredevices")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the devices without successful snapshot over a given period",
 		description = "Returns the list of devices which didn't have a successful snapshot over the given number of days, optionally "
@@ -8127,8 +8048,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the username
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getUsername() {
 			return username;
 		}
@@ -8147,8 +8067,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the password
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPassword() {
 			return password;
 		}
@@ -8167,8 +8086,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the new password
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getNewPassword() {
 			return newPassword;
 		}
@@ -8186,7 +8104,6 @@ public class RestService extends Thread {
 	/**
 	 * Logout.
 	 *
-	 * @param request the request
 	 * @return the boolean
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -8194,6 +8111,7 @@ public class RestService extends Thread {
 	@Path("/user/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "User log out",
 		description = "Terminates the current user session (useless when using API tokens)."
@@ -8210,7 +8128,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the password.
 	 *
-	 * @param request the request
 	 * @param rsLogin the rs login
 	 * @return the user
 	 * @throws WebApplicationException the web application exception
@@ -8220,6 +8137,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a user",
 		description = "Edits a given user, by ID, especially the password for a local user."
@@ -8270,7 +8188,6 @@ public class RestService extends Thread {
 	/**
 	 * Login.
 	 *
-	 * @param request the request
 	 * @param rsLogin the rs login
 	 * @return the user
 	 * @throws WebApplicationException the web application exception
@@ -8280,6 +8197,7 @@ public class RestService extends Thread {
 	@Path("/user")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Log in",
 		description = "Logs in (create session) by username and password (useless when using API tokens)."
@@ -8287,6 +8205,26 @@ public class RestService extends Thread {
 	public UiUser login(RsLogin rsLogin) throws WebApplicationException {
 		logger.debug("REST authentication request, username {}.", rsLogin.getUsername());
 		Netshot.aaaLogger.info("REST authentication request, username {}.", rsLogin.getUsername());
+
+		NetworkAddress remoteAddress = null;
+		{
+			String address = null;
+			try {
+				address = request.getHeader("X-Forwarded-For");
+				if (address == null) {
+					address = request.getRemoteAddr();
+				}
+				remoteAddress = NetworkAddress.getNetworkAddress(address, 0);
+			}
+			catch (UnknownHostException e) {
+				logger.warn("Unable to parse remote address", address);
+				try {
+					remoteAddress = new Network4Address(0, 0);
+				}
+				catch (UnknownHostException e1) {
+				}
+			}
+		}
 
 		UiUser user = null;
 
@@ -8305,21 +8243,27 @@ public class RestService extends Thread {
 
 		if (user != null && user.isLocal()) {
 			if (user.checkPassword(rsLogin.getPassword())) {
-				Netshot.aaaLogger.info("Local authentication success for user {}.", rsLogin.getUsername());
+				Netshot.aaaLogger.info("Local authentication success for user {} from {}.", rsLogin.getUsername(), remoteAddress);
 			}
 			else {
-				Netshot.aaaLogger.warn("Local authentication failure for user {}.", rsLogin.getUsername());
+				Netshot.aaaLogger.warn("Local authentication failure for user {} from {}.", rsLogin.getUsername(), remoteAddress);
 				user = null;
 			}
 		}
 		else {
-			UiUser remoteUser = Radius.authenticate(rsLogin.getUsername(), rsLogin.getPassword());
+			UiUser remoteUser = null;
+			if (Radius.isAvailable()) {
+				remoteUser = Radius.authenticate(rsLogin.getUsername(), rsLogin.getPassword(), remoteAddress);
+			}
+			if (remoteUser == null && Tacacs.isAvailable()) {
+				remoteUser = Tacacs.authenticate(rsLogin.getUsername(), rsLogin.getPassword(), remoteAddress);
+			}
 			if (remoteUser != null && user != null) {
 				remoteUser.setLevel(user.getLevel());
-				Netshot.aaaLogger.info("Remote authentication success for user {}.", rsLogin.getUsername());
+				Netshot.aaaLogger.info("Remote authentication success for user {} from {}.", rsLogin.getUsername(), remoteAddress);
 			}
 			else {
-				Netshot.aaaLogger.warn("Remote authentication failure for user {}.", rsLogin.getUsername());
+				Netshot.aaaLogger.warn("Remote authentication failure for user {} from {}.", rsLogin.getUsername(), remoteAddress);
 			}
 			user = remoteUser;
 		}
@@ -8338,7 +8282,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the user.
 	 *
-	 * @param request the request
 	 * @return the user
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -8346,6 +8289,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readonly")
 	@Path("/user")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the current user",
 		description = "Returns the current logged in user."
@@ -8358,7 +8302,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the users.
 	 *
-	 * @param request the request
 	 * @return the users
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -8366,6 +8309,7 @@ public class RestService extends Thread {
 	@Path("/users")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the users",
 		description = "Returns the list of Netshot users."
@@ -8414,8 +8358,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -8434,8 +8377,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the username
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getUsername() {
 			return username;
 		}
@@ -8454,8 +8396,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the password
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getPassword() {
 			return password;
 		}
@@ -8474,8 +8415,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the level
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getLevel() {
 			return level;
 		}
@@ -8494,8 +8434,7 @@ public class RestService extends Thread {
 		 *
 		 * @return true, if is local
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isLocal() {
 			return local;
 		}
@@ -8513,7 +8452,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the user.
 	 *
-	 * @param request the request
 	 * @param rsUser the rs user
 	 * @return the user
 	 */
@@ -8522,6 +8460,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a user to Netshot",
 		description = "Create a Netshot user."
@@ -8583,7 +8522,6 @@ public class RestService extends Thread {
 	/**
 	 * Sets the user.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @param rsUser the rs user
 	 * @return the user
@@ -8594,6 +8532,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a Netshot user",
 		description = "Edits a Netshot user, by ID."
@@ -8664,7 +8603,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete user.
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -8672,6 +8610,7 @@ public class RestService extends Thread {
 	@Path("/users/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a Netshot user.",
 		description = "Removes a user from the Netshot database."
@@ -8729,8 +8668,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -8749,8 +8687,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the description
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDescription() {
 			return description;
 		}
@@ -8769,8 +8706,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the token
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getToken() {
 			return token;
 		}
@@ -8789,8 +8725,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the level
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public int getLevel() {
 			return level;
 		}
@@ -8808,7 +8743,6 @@ public class RestService extends Thread {
 	/**
 	 * Adds the API token.
 	 *
-	 * @param request the request
 	 * @param rsAPiToken the rs API token
 	 * @return the API token
 	 */
@@ -8817,6 +8751,7 @@ public class RestService extends Thread {
 	@RolesAllowed("admin")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a new API token",
 		description = "Creates a new API token."
@@ -8870,6 +8805,7 @@ public class RestService extends Thread {
 	@Path("/apitokens")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the API tokens",
 		description = "Returns the list of API tokens."
@@ -8901,6 +8837,7 @@ public class RestService extends Thread {
 	@Path("/apitokens/{id}")
 	@RolesAllowed("admin")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove an API token",
 		description = "Removes an API token, by ID."
@@ -8938,6 +8875,7 @@ public class RestService extends Thread {
 	@Path("/reports/export")
 	@RolesAllowed("readonly")
 	@Produces({ "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Export data",
 		description = "Exports data as Excel datasheet. The devices can be filtered by groups or domains. " +
@@ -9003,7 +8941,7 @@ public class RestService extends Thread {
 					row = summarySheet.createRow(++y);
 					row.createCell(0).setCellValue("Selected Domain");
 					row.getCell(0).setCellStyle(titleCellStyle);
-					if (domains.size() == 0) {
+					if (domains.isEmpty()) {
 						row.createCell(1).setCellValue("Any");
 					}
 					else {
@@ -9011,7 +8949,7 @@ public class RestService extends Thread {
 							.createQuery("select d from Domain d where d.id in (:domainIds)", Domain.class)
 							.setParameterList("domainIds", domains)
 							.list();
-						List<String> domainNames = new ArrayList<String>();
+						List<String> domainNames = new ArrayList<>();
 						for (Domain deviceDomain : deviceDomains) {
 							domainNames.add(String.format("%s (%d)", deviceDomain.getName(), deviceDomain.getId()));
 						}
@@ -9020,7 +8958,7 @@ public class RestService extends Thread {
 					row = summarySheet.createRow(++y);
 					row.createCell(0).setCellValue("Selected Group");
 					row.getCell(0).setCellStyle(titleCellStyle);
-					if (groups.size() == 0) {
+					if (groups.isEmpty()) {
 						row.createCell(1).setCellValue("Any");
 					}
 					else {
@@ -9028,7 +8966,7 @@ public class RestService extends Thread {
 							.createQuery("select g from DeviceGroup g where g.id in (:groupIds)", DeviceGroup.class)
 							.setParameterList("groupIds", groups)
 							.list();
-						List<String> groupNames = new ArrayList<String>();
+						List<String> groupNames = new ArrayList<>();
 						for (DeviceGroup group : deviceGroups) {
 							groupNames.add(String.format("%s (%d)", group.getName(), group.getId()));
 						}
@@ -9038,7 +8976,7 @@ public class RestService extends Thread {
 				}
 
 				{
-					StringBuffer deviceHqlQuery = new StringBuffer(
+					StringBuilder deviceHqlQuery = new StringBuilder(
 							"select d from Device d left join d.ownerGroups g left join fetch d.mgmtDomain " +
 							"where 1 = 1");
 					if (domains.size() > 0) {
@@ -9159,7 +9097,7 @@ public class RestService extends Thread {
 	
 				if (exportInterfaces) {
 					logger.debug("Exporting interface data");
-					StringBuffer interfaceHqlQuery = new StringBuffer(
+					StringBuilder interfaceHqlQuery = new StringBuilder(
 							"select ni from NetworkInterface ni " +
 							"left join fetch ni.ip4Addresses left join fetch ni.ip6Addresses " +
 							"join fetch ni.device left join ni.device.ownerGroups g where 1 = 1");
@@ -9229,7 +9167,7 @@ public class RestService extends Thread {
 					List<NetworkInterface> networkInterfaces = interfaceQuery.list();
 					for (NetworkInterface networkInterface : networkInterfaces) {
 						Device device = networkInterface.getDevice();
-						if (networkInterface.getIpAddresses().size() == 0) {
+						if (networkInterface.getIpAddresses().isEmpty()) {
 							row = interfaceSheet.createRow(++y);
 							int x = -1;
 							row.createCell(++x).setCellValue(device.getId());
@@ -9267,7 +9205,7 @@ public class RestService extends Thread {
 	
 				if (exportInventory) {
 					logger.debug("Exporting device inventory");
-					StringBuffer moduleHqlQuery = new StringBuffer(
+					StringBuilder moduleHqlQuery = new StringBuilder(
 							"select m from Module m join fetch m.device left join m.device.ownerGroups g where 1 = 1");
 					if (domains.size() > 0) {
 						moduleHqlQuery.append(" and m.device.mgmtDomain.id in (:domainIds)");
@@ -9332,7 +9270,7 @@ public class RestService extends Thread {
 				if (exportCompliance) {
 					logger.debug("Exporting compliance data");
 					List<RsLightPolicyRuleDevice> checkResults = getConfigComplianceDeviceStatuses(domains, groups,
-							new HashSet<Long>(), new HashSet<CheckResult.ResultOption>(
+							new HashSet<Long>(), new HashSet<>(
 									Arrays.asList(new CheckResult.ResultOption[] { CheckResult.ResultOption.CONFORMING,
 											CheckResult.ResultOption.NONCONFORMING, CheckResult.ResultOption.EXEMPTED })));
 
@@ -9435,7 +9373,7 @@ public class RestService extends Thread {
 					}
 					{
 						logger.debug("Exporting group memberships");
-						StringBuffer deviceHqlQuery = new StringBuffer(
+						StringBuilder deviceHqlQuery = new StringBuilder(
 								"select d from Device d left join d.ownerGroups g left join d.mgmtDomain " +
 								"where 1 = 1");
 						if (domains.size() > 0) {
@@ -9533,6 +9471,7 @@ public class RestService extends Thread {
 	@RolesAllowed("readwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a command script",
 		description = "Create a command script (script to be later run over devices)."
@@ -9594,6 +9533,7 @@ public class RestService extends Thread {
 	@Path("/scripts/{id}")
 	@RolesAllowed("readwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a script",
 		description = "Removes a given script, by ID."
@@ -9631,6 +9571,7 @@ public class RestService extends Thread {
 	@Path("/scripts/{id}")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get a command script",
 		description = "Returns a given command script, by ID."
@@ -9661,6 +9602,7 @@ public class RestService extends Thread {
 	@Path("/scripts")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get command scripts",
 		description = "Returns the list of command scripts."
@@ -9741,8 +9683,7 @@ public class RestService extends Thread {
 		/**
 		 * @return the deviceDriver
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getDeviceDriver() {
 			return deviceDriver;
 		}
@@ -9759,8 +9700,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the id
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getId() {
 			return id;
 		}
@@ -9779,8 +9719,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the name
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getName() {
 			return name;
 		}
@@ -9799,8 +9738,7 @@ public class RestService extends Thread {
 		 *
 		 * @return the target group
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public long getTargetGroup() {
 			return targetGroup;
 		}
@@ -9818,8 +9756,7 @@ public class RestService extends Thread {
 		 * Set to yes to enable to diagnostic.
 		 * @return the enabled True to enable, false to disable
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public boolean isEnabled() {
 			return enabled;
 		}
@@ -9835,8 +9772,7 @@ public class RestService extends Thread {
 		/**
 		 * @return the script
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getScript() {
 			return script;
 		}
@@ -9852,8 +9788,7 @@ public class RestService extends Thread {
 		/**
 		 * @return the command
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getCommand() {
 			return command;
 		}
@@ -9869,8 +9804,7 @@ public class RestService extends Thread {
 		/**
 		 * @return the modifierPattern
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getModifierPattern() {
 			return modifierPattern;
 		}
@@ -9886,8 +9820,7 @@ public class RestService extends Thread {
 		/**
 		 * @return the modifierReplacement
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getModifierReplacement() {
 			return modifierReplacement;
 		}
@@ -9903,8 +9836,7 @@ public class RestService extends Thread {
 		 * Gets the type of diagnostic.
 		 * @return the type
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getType() {
 			return type;
 		}
@@ -9921,8 +9853,7 @@ public class RestService extends Thread {
 		 * Gets the CLI mode.
 		 * @return the cliMode
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getCliMode() {
 			return cliMode;
 		}
@@ -9939,8 +9870,7 @@ public class RestService extends Thread {
 		 * Gets the type of result.
 		 * @return the resultType
 		 */
-		@XmlElement
-		@JsonView(DefaultView.class)
+		@XmlElement @JsonView(DefaultView.class)
 		public String getResultType() {
 			return resultType;
 		}
@@ -9959,7 +9889,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the diagnotics.
 	 *
-	 * @param request the request
 	 * @return the diagnotics
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -9967,6 +9896,7 @@ public class RestService extends Thread {
 	@Path("/diagnostics")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get the diagnostics",
 		description = "Returns the list of diagnostics."
@@ -9996,6 +9926,7 @@ public class RestService extends Thread {
 	@RolesAllowed("executereadwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Add a diagnostic.",
 		description = "Creates a diagnostic."
@@ -10028,11 +9959,11 @@ public class RestService extends Thread {
 			session.beginTransaction();
 			DeviceGroup group = null;
 			if (rsDiagnostic.getTargetGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsDiagnostic.getTargetGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsDiagnostic.getTargetGroup());
 			}
 
 			if (".JavaScriptDiagnostic".equals(rsDiagnostic.getType())) {
-				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim() == "") {
+				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim().equals("")) {
 					throw new NetshotBadRequestException(
 						"Invalid diagnostic script",
 						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
@@ -10040,12 +9971,21 @@ public class RestService extends Thread {
 				diagnostic = new JavaScriptDiagnostic(name, rsDiagnostic.isEnabled(), group, 
 						resultType, rsDiagnostic.getScript());
 			}
+			else if (".PythonDiagnostic".equals(rsDiagnostic.getType())) {
+				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim().equals("")) {
+					throw new NetshotBadRequestException(
+						"Invalid diagnostic script",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
+				}
+				diagnostic = new PythonDiagnostic(name, rsDiagnostic.isEnabled(), group, 
+						resultType, rsDiagnostic.getScript());
+			}
 			else if (".SimpleDiagnostic".equals(rsDiagnostic.getType())) {
-				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim() == "") {
+				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim().equals("")) {
 					throw new NetshotBadRequestException("The CLI mode must be provided.",
 							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
-				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim() == "") {
+				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim().equals("")) {
 					throw new NetshotBadRequestException("The command cannot be empty.",
 							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
@@ -10094,7 +10034,6 @@ public class RestService extends Thread {
 	/**
 	 * Updates the diagnostic.
 	 * 
-	 * @param request the request
 	 * @param id the diagnostic ID
 	 * @param rsDiagnostic the passed diagnostic
 	 * @return the updated diagnostic
@@ -10105,6 +10044,7 @@ public class RestService extends Thread {
 	@RolesAllowed("executereadwrite")
 	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Update a diagnostic",
 		description = "Creates a new diagnostic."
@@ -10149,7 +10089,7 @@ public class RestService extends Thread {
 			}
 			DeviceGroup group = null;
 			if (rsDiagnostic.getTargetGroup() != -1) {
-				group = (DeviceGroup) session.load(DeviceGroup.class, rsDiagnostic.getTargetGroup());
+				group = (DeviceGroup) session.get(DeviceGroup.class, rsDiagnostic.getTargetGroup());
 			}
 			diagnostic.setTargetGroup(group);
 
@@ -10160,23 +10100,35 @@ public class RestService extends Thread {
 					throw new NetshotBadRequestException("Incompatible posted diagnostic.",
 							NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
 				}
-				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim() == "") {
+				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim().equals("")) {
 					throw new NetshotBadRequestException(
 						"Invalid diagnostic script",
 						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
 				((JavaScriptDiagnostic) diagnostic).setScript(rsDiagnostic.getScript());
 			}
+			else if (diagnostic instanceof PythonDiagnostic) {
+				if (!".PythonDiagnostic".equals(rsDiagnostic.getType())) {
+					throw new NetshotBadRequestException("Incompatible posted diagnostic.",
+							NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
+				}
+				if (rsDiagnostic.getScript() == null || rsDiagnostic.getScript().trim().equals("")) {
+					throw new NetshotBadRequestException(
+						"Invalid diagnostic script",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
+				}
+				((PythonDiagnostic) diagnostic).setScript(rsDiagnostic.getScript());
+			}
 			else if (diagnostic instanceof SimpleDiagnostic) {
 				if (!".SimpleDiagnostic".equals(rsDiagnostic.getType())) {
 					throw new NetshotBadRequestException("Incompatible posted diagnostic.",
 							NetshotBadRequestException.Reason.NETSHOT_INCOMPATIBLE_DIAGNOSTIC);
 				}
-				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim() == "") {
+				if (rsDiagnostic.getCliMode() == null || rsDiagnostic.getCliMode().trim().equals("")) {
 					throw new NetshotBadRequestException("The CLI mode must be provided.",
 							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
-				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim() == "") {
+				if (rsDiagnostic.getCommand() == null || rsDiagnostic.getCommand().trim().equals("")) {
 					throw new NetshotBadRequestException("The command cannot be empty.",
 							NetshotBadRequestException.Reason.NETSHOT_INVALID_DIAGNOSTIC);
 				}
@@ -10225,7 +10177,6 @@ public class RestService extends Thread {
 	/**
 	 * Delete diagnostic.
 	 *
-	 * @param request the request
 	 * @param id the id of the diagnostic to delete
 	 * @throws WebApplicationException the web application exception
 	 */
@@ -10233,6 +10184,7 @@ public class RestService extends Thread {
 	@Path("/diagnostics/{id}")
 	@RolesAllowed("executereadwrite")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Remove a diagnostic",
 		description = "Removes a given diagnostic, by ID."
@@ -10269,7 +10221,6 @@ public class RestService extends Thread {
 	/**
 	 * Gets the device diagnostic results
 	 *
-	 * @param request the request
 	 * @param id the id
 	 * @return the device compliance
 	 * @throws WebApplicationException the web application exception
@@ -10278,6 +10229,7 @@ public class RestService extends Thread {
 	@Path("/devices/{id}/diagnosticresults")
 	@RolesAllowed("readonly")
 	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
 	@Operation(
 		summary = "Get diagnostic results",
 		description = "Returns the results of a given diagnostic, by ID."
@@ -10301,6 +10253,252 @@ public class RestService extends Thread {
 			session.close();
 		}
 	}
+	
+	/**
+	 * Gets the hooks.
+	 *
+	 * @return the current hooks
+	 * @throws WebApplicationException the web application exception
+	 */
+	@GET
+	@Path("/hooks")
+	@RolesAllowed("admin")
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
+	@Operation(
+		summary = "Get the hooks",
+		description = "Returns the current list of hooks."
+	)
+	public List<Hook> getHooks() throws WebApplicationException {
+		logger.debug("REST request, hooks.");
+		Session session = Database.getSession();
+		try {
+			List<Hook> hooks = session.createQuery("select h from Hook h left join fetch h.triggers", Hook.class).list();
+			return hooks;
+		}
+		catch (HibernateException e) {
+			logger.error("Unable to fetch the hooks.", e);
+			throw new NetshotBadRequestException("Unable to fetch the hooks",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+
+	/**
+	 * Adds the hook.
+	 *
+	 * @param hook the hook
+	 * @return the new hook
+	 * @throws WebApplicationException the web application exception
+	 */
+	@POST
+	@Path("/hooks")
+	@RolesAllowed("admin")
+	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
+	@Operation(
+		summary = "Add a hook",
+		description = "Creates a hook. Based on given criteria, Netshot will run the given action when specific events occur."
+	)
+	public Hook addHook(Hook hook) throws WebApplicationException {
+		logger.debug("REST request, add hook.");
+		if (hook.getName() == null || hook.getName().trim().equals("")) {
+			logger.error("Invalid hook name.");
+			throw new NetshotBadRequestException("Invalid name for the hook",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_NAME);
+		}
+		if (hook.getTriggers() != null) {
+			for (HookTrigger trigger : hook.getTriggers()) {
+				trigger.setHook(hook);
+			}
+		}
+		if (hook instanceof WebHook) {
+			WebHook webHook = (WebHook)hook;
+			try {
+				webHook.getParsedUrl();
+			}
+			catch (MalformedURLException e) {
+				throw new NetshotBadRequestException("Invalid Web hook target URL",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_WEB_URL);
+			}
+			if (webHook.getAction() == null) {
+				throw new NetshotBadRequestException("Invalid action",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_WEB);
+			}
+		}
+		Session session = Database.getSession();
+		try {
+			session.beginTransaction();
+			session.save(hook);
+			session.getTransaction().commit();
+			Netshot.aaaLogger.info("{} has been created.", hook);
+			this.suggestReturnCode(Response.Status.CREATED);
+			return hook;
+		}
+		catch (HibernateException e) {
+			session.getTransaction().rollback();
+			Throwable t = e.getCause();
+			logger.error("Can't add the hook.", e);
+			if (t != null && t.getMessage().contains("uplicate")) {
+				throw new NetshotBadRequestException(
+						"A hook with this name already exists.",
+						NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_HOOK);
+			}
+			throw new NetshotBadRequestException("Unable to save the hook",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	/**
+	 * Delete hook.
+	 *
+	 * @param id the id of the hook
+	 * @throws WebApplicationException the web application exception
+	 */
+	@DELETE
+	@Path("/hooks/{id}")
+	@RolesAllowed("admin")
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
+	@Operation(
+		summary = "Remove a hook",
+		description = "Removes the hook, by ID."
+	)
+	public void deleteHook(@PathParam("id") Long id) throws WebApplicationException {
+		logger.debug("REST request, delete hook {}", id);
+		Session session = Database.getSession();
+		try {
+			session.beginTransaction();
+			Hook hook = session.load(Hook.class, id);
+			session.delete(hook);
+			session.getTransaction().commit();
+			Netshot.aaaLogger.info("{} has been deleted.", hook);
+			this.suggestReturnCode(Response.Status.NO_CONTENT);
+		}
+		catch (ObjectNotFoundException e) {
+			session.getTransaction().rollback();
+			logger.error("The hook {} to be deleted doesn't exist.", id, e);
+			throw new NetshotBadRequestException("The hook doesn't exist.",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK);
+		}
+		catch (Exception e) {
+			session.getTransaction().rollback();
+			logger.error("Unable to delete the hook {}", id, e);
+			throw new NetshotBadRequestException(
+					"Unable to delete the hook",
+					NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	/**
+	 * Sets the hook.
+	 *
+	 * @param id the id
+	 * @param rsHook the hook
+	 * @return the updated hook
+	 * @throws WebApplicationException the web application exception
+	 */
+	@PUT
+	@Path("/hooks/{id}")
+	@RolesAllowed("admin")
+	@Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+	@JsonView(RestApiView.class)
+	@Operation(
+		summary = "Update a hook",
+		description = "Edits a hook, by ID."
+	)
+	public Hook setHook(@PathParam("id") Long id, Hook rsHook) throws WebApplicationException {
+		logger.debug("REST request, edit hook {}", id);
+		rsHook.setId(id);
+		if (rsHook.getName() == null || rsHook.getName().trim().equals("")) {
+			logger.error("Invalid hook name.");
+			throw new NetshotBadRequestException("Invalid name for the hook",
+					NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_NAME);
+		}
+		if (rsHook instanceof WebHook) {
+			WebHook rsWebHook = (WebHook)rsHook;
+			try {
+				rsWebHook.getParsedUrl();
+			}
+			catch (MalformedURLException e) {
+				throw new NetshotBadRequestException("Invalid Web hook target URL",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_WEB_URL);
+			}
+			if (rsWebHook.getAction() == null) {
+				throw new NetshotBadRequestException("Invalid action",
+						NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_WEB);
+			}
+		}
+		{
+			Session session = Database.getSession();
+			try {
+				session.beginTransaction();
+				Hook hook = session.get(rsHook.getClass(), id);
+				if (hook == null) {
+					logger.error("Unable to find the hook {}.", id);
+					throw new NetshotBadRequestException(
+							"Unable to find the hook.",
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK);
+				}
+				if (!hook.getClass().equals(rsHook.getClass())) {
+					logger.error("Wrong posted type for hook {}.", id);
+					throw new NetshotBadRequestException(
+							"The posted hook type doesn't match the existing one.",
+							NetshotBadRequestException.Reason.NETSHOT_INVALID_HOOK_TYPE);
+				}
+				hook.setEnabled(rsHook.isEnabled());
+				hook.setName(rsHook.getName());
+				for (HookTrigger trigger : rsHook.getTriggers()) {
+					trigger.setHook(hook);
+				}
+				// Ensure we keep the same HookTrigger object instances
+				hook.getTriggers().retainAll(rsHook.getTriggers());
+				hook.getTriggers().addAll(rsHook.getTriggers());
+				if (rsHook instanceof WebHook) {
+					WebHook rsWebHook = (WebHook)rsHook;
+					WebHook webHook = (WebHook)hook;
+					webHook.setAction(rsWebHook.getAction());
+					webHook.setUrl(rsWebHook.getUrl());
+					webHook.setSslValidation(rsWebHook.isSslValidation());
+				}
+				session.update(hook);
+				session.getTransaction().commit();
+				Netshot.aaaLogger.info("{} has been edited", rsHook);
+				return rsHook;
+			}
+			catch (HibernateException e) {
+				session.getTransaction().rollback();
+				Throwable t = e.getCause();
+				logger.error("Unable to save the hook {}.", id, e);
+				if (t != null && t.getMessage().contains("uplicate")) {
+					throw new NetshotBadRequestException(
+							"A hook with this name already exists.",
+							NetshotBadRequestException.Reason.NETSHOT_DUPLICATE_HOOK);
+				}
+				throw new NetshotBadRequestException("Unable to save the hook",
+						NetshotBadRequestException.Reason.NETSHOT_DATABASE_ACCESS_ERROR);
+			}
+			catch (NetshotBadRequestException e) {
+				session.getTransaction().rollback();
+				throw e;
+			}
+			finally {
+				session.close();
+			}
+		}
+	}
+
 
 }
 

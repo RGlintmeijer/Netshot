@@ -47,7 +47,7 @@ import org.slf4j.LoggerFactory;
 public class RunDeviceScriptTask extends Task {
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(RunDeviceScriptTask.class);
+	final private static Logger logger = LoggerFactory.getLogger(RunDeviceScriptTask.class);
 
 	/** The device. */
 	private Device device;
@@ -141,8 +141,7 @@ public class RunDeviceScriptTask extends Task {
 	 * @see onl.netfishers.netshot.work.Task#getTaskDescription()
 	 */
 	@Override
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public String getTaskDescription() {
 		return "Device script execution";

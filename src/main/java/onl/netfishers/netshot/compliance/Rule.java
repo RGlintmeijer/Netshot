@@ -47,6 +47,7 @@ import com.fasterxml.jackson.annotation.JsonView;
 
 import onl.netfishers.netshot.compliance.CheckResult.ResultOption;
 import onl.netfishers.netshot.compliance.rules.JavaScriptRule;
+import onl.netfishers.netshot.compliance.rules.PythonRule;
 import onl.netfishers.netshot.compliance.rules.TextRule;
 import onl.netfishers.netshot.device.Device;
 import onl.netfishers.netshot.rest.RestViews.DefaultView;
@@ -64,14 +65,15 @@ import onl.netfishers.netshot.work.TaskLogger;
 public abstract class Rule {
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(Rule.class);
+	final private static Logger logger = LoggerFactory.getLogger(Rule.class);
 
 	/** The set of real rule types. */
 	private static final Set<Class<? extends Rule>> RULE_CLASSES;
 
 	static {
-		RULE_CLASSES = new HashSet<Class<? extends Rule>>();
+		RULE_CLASSES = new HashSet<>();
 		RULE_CLASSES.add(JavaScriptRule.class);
+		RULE_CLASSES.add(PythonRule.class);
 		RULE_CLASSES.add(TextRule.class);
 	}
 
@@ -98,10 +100,10 @@ public abstract class Rule {
 	protected String name = "";
 
 	/** The exemptions. */
-	private Set<Exemption> exemptions = new HashSet<Exemption>();
+	private Set<Exemption> exemptions = new HashSet<>();
 
 	/** The check results. */
-	private Set<CheckResult> checkResults = new HashSet<CheckResult>();
+	private Set<CheckResult> checkResults = new HashSet<>();
 
 	/**
 	 * Instantiates a new rule.
@@ -172,9 +174,7 @@ public abstract class Rule {
 		if (getClass() != obj.getClass())
 			return false;
 		Rule other = (Rule) obj;
-		if (id != other.id)
-			return false;
-		return true;
+		return id == other.id;
 	}
 
 	/**
@@ -184,8 +184,7 @@ public abstract class Rule {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -216,8 +215,7 @@ public abstract class Rule {
 	 *
 	 * @return true, if is enabled
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isEnabled() {
 		return enabled;
 	}
@@ -254,8 +252,7 @@ public abstract class Rule {
 	 *
 	 * @return the name
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getName() {
 		return name;
 	}

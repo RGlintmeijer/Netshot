@@ -23,6 +23,7 @@ import java.util.Set;
 
 import javax.persistence.CascadeType;
 import javax.persistence.Entity;
+import javax.persistence.FetchType;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
@@ -57,7 +58,7 @@ public class Policy {
 	private String name;
 
 	/** The rules. */
-	private Set<Rule> rules = new HashSet<Rule>();
+	private Set<Rule> rules = new HashSet<>();
 
 	/** The target group. */
 	private DeviceGroup targetGroup;
@@ -122,8 +123,7 @@ public class Policy {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -134,8 +134,7 @@ public class Policy {
 	 * @return the name
 	 */
 	@NaturalId(mutable = true)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getName() {
 		return name;
 	}
@@ -155,9 +154,8 @@ public class Policy {
 	 *
 	 * @return the target group
 	 */
-	@ManyToOne
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@ManyToOne(fetch = FetchType.EAGER)
+	@XmlElement @JsonView(DefaultView.class)
 	public DeviceGroup getTargetGroup() {
 		return targetGroup;
 	}
@@ -221,9 +219,7 @@ public class Policy {
 		if (getClass() != obj.getClass())
 			return false;
 		Policy other = (Policy) obj;
-		if (id != other.id)
-			return false;
-		return true;
+		return id == other.id;
 	}
 
 	@Override

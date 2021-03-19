@@ -66,6 +66,7 @@ import onl.netfishers.netshot.device.attribute.DeviceAttribute;
 import onl.netfishers.netshot.device.credentials.DeviceCredentialSet;
 import onl.netfishers.netshot.diagnostic.DiagnosticResult;
 import onl.netfishers.netshot.rest.RestViews.DefaultView;
+import onl.netfishers.netshot.rest.RestViews.RestApiView;
 import onl.netfishers.netshot.work.tasks.CheckComplianceTask;
 import onl.netfishers.netshot.work.tasks.RunDiagnosticsTask;
 import onl.netfishers.netshot.work.tasks.RunDeviceScriptTask;
@@ -142,7 +143,7 @@ public class Device {
 	
 
 	/** The attributes. */
-	private Set<DeviceAttribute> attributes = new HashSet<DeviceAttribute>();
+	private Set<DeviceAttribute> attributes = new HashSet<>();
 
 	/** The auto try credentials. */
 	protected boolean autoTryCredentials = true;
@@ -153,28 +154,28 @@ public class Device {
 	private int version;
 
 	/** The check compliance tasks. */
-	protected List<CheckComplianceTask> checkComplianceTasks = new ArrayList<CheckComplianceTask>();
+	protected List<CheckComplianceTask> checkComplianceTasks = new ArrayList<>();
 	
 	/** The run device script tasks. */
-	protected List<RunDeviceScriptTask> runDeviceScriptTasks = new ArrayList<RunDeviceScriptTask>();
+	protected List<RunDeviceScriptTask> runDeviceScriptTasks = new ArrayList<>();
 	
 	/** The diagnostic tasks. */
-	protected List<RunDiagnosticsTask> runDiagnosticsTasks = new ArrayList<RunDiagnosticsTask>();
+	protected List<RunDiagnosticsTask> runDiagnosticsTasks = new ArrayList<>();
 
 	/** The comments. */
 	protected String comments = "";
 
 	/** The compliance check results. */
-	protected Set<CheckResult> complianceCheckResults = new HashSet<CheckResult>();
+	protected Set<CheckResult> complianceCheckResults = new HashSet<>();
 
 	/** The compliance exemptions. */
-	protected Set<Exemption> complianceExemptions = new HashSet<Exemption>();
+	protected Set<Exemption> complianceExemptions = new HashSet<>();
 
 	/** The configs. */
-	protected List<Config> configs = new ArrayList<Config>();
-	
+	protected List<Config> configs = new ArrayList<>();
+
 	/** The diagnostic results. */
-	protected Set<DiagnosticResult> diagnosticResults = new HashSet<DiagnosticResult>();
+	protected Set<DiagnosticResult> diagnosticResults = new HashSet<>();
 
 	/** The contact. */
 	protected String contact = "";
@@ -185,12 +186,12 @@ public class Device {
 	private String creator;
 
 	/** The credential sets. */
-	protected Set<DeviceCredentialSet> credentialSets = new HashSet<DeviceCredentialSet>();
+	protected Set<DeviceCredentialSet> credentialSets = new HashSet<>();
 
 	/** Device-specific credential set/ */
 	protected DeviceCredentialSet specificCredentialSet;
 
-	/** The device driver name. */
+	/** The device deviceDriver name. */
 	protected String driver;
 
 	/** End of Life Date. */
@@ -224,7 +225,7 @@ public class Device {
 	protected Domain mgmtDomain;
 
 	/** The modules. */
-	protected List<Module> modules = new ArrayList<Module>();
+	protected List<Module> modules = new ArrayList<>();
 
 	/** The name. */
 	protected String name = DEFAULTNAME;
@@ -233,16 +234,16 @@ public class Device {
 	protected NetworkClass networkClass = NetworkClass.UNKNOWN;
 
 	/** The network interfaces. */
-	protected List<NetworkInterface> networkInterfaces = new ArrayList<NetworkInterface>();
+	protected List<NetworkInterface> networkInterfaces = new ArrayList<>();
 
 	/** The owner groups. */
-	protected Set<DeviceGroup> ownerGroups = new HashSet<DeviceGroup>();
+	protected Set<DeviceGroup> ownerGroups = new HashSet<>();
 
 	/** The serial number. */
 	protected String serialNumber = "";
 
 	/** The snapshot tasks. */
-	protected List<TakeSnapshotTask> snapshotTasks = new ArrayList<TakeSnapshotTask>();
+	protected List<TakeSnapshotTask> snapshotTasks = new ArrayList<>();
 
 	/** The software level. */
 	protected SoftwareRule.ConformanceLevel softwareLevel = ConformanceLevel.UNKNOWN;
@@ -254,10 +255,10 @@ public class Device {
 	protected Status status = Status.INPRODUCTION;
 
 	/** The virtual devices. */
-	protected Set<String> virtualDevices = new HashSet<String>();
+	protected Set<String> virtualDevices = new HashSet<>();
 
 	/** The vrf instances. */
-	protected Set<String> vrfInstances = new HashSet<String>();
+	protected Set<String> vrfInstances = new HashSet<>();
 	
 	/** SSH TCP port, 22 by default */
 	protected int sshPort = 0;
@@ -370,13 +371,10 @@ public class Device {
 		if (getClass() != obj.getClass())
 			return false;
 		Device other = (Device) obj;
-		if (id != other.id)
-			return false;
-		return true;
+		return id == other.id;
 	}
 	
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(RestApiView.class)
 	@OneToMany(cascade = CascadeType.ALL, mappedBy = "device", orphanRemoval = true)
 	public Set<DeviceAttribute> getAttributes() {
 		return attributes;
@@ -397,8 +395,7 @@ public class Device {
 	 *
 	 * @return the change date
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getChangeDate() {
 		return changeDate;
 	}
@@ -447,8 +444,7 @@ public class Device {
 	 *
 	 * @return the comments
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getComments() {
 		return comments;
 	}
@@ -488,8 +484,7 @@ public class Device {
 	 *
 	 * @return the contact
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getContact() {
 		return contact;
 	}
@@ -499,14 +494,12 @@ public class Device {
 	 *
 	 * @return the created date
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getCreatedDate() {
 		return createdDate;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getCreator() {
 		return creator;
 	}
@@ -516,11 +509,10 @@ public class Device {
 	 *
 	 * @return the credential set ids
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public List<Long> getCredentialSetIds() {
-		List<Long> l = new ArrayList<Long>();
+		List<Long> l = new ArrayList<>();
 		for (DeviceCredentialSet credentialSet : credentialSets) {
 			l.add(credentialSet.getId());
 		}
@@ -551,33 +543,28 @@ public class Device {
 		return deviceDriver;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getDriver() {
 		return driver;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getEolDate() {
 		return eolDate;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@OneToOne(fetch = FetchType.LAZY)
 	public Module getEolModule() {
 		return eolModule;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Date getEosDate() {
 		return eosDate;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@OneToOne(fetch = FetchType.LAZY)
 	public Module getEosModule() {
 		return eosModule;
@@ -588,8 +575,7 @@ public class Device {
 	 *
 	 * @return the family
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getFamily() {
 		return family;
 	}
@@ -622,8 +608,7 @@ public class Device {
 	 *
 	 * @return the location
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getLocation() {
 		return location;
 	}
@@ -639,8 +624,7 @@ public class Device {
 		@AttributeOverride(name = "prefixLength", column = @Column(name = "ipv4_pfxlen")),
 		@AttributeOverride(name = "addressUsage", column = @Column(name = "ipv4_usage")),
 	})
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Network4Address getMgmtAddress() {
 		return mgmtAddress;
 	}
@@ -652,8 +636,7 @@ public class Device {
 	 * @return the mgmt domain
 	 */
 	@ManyToOne(fetch = FetchType.LAZY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(RestApiView.class)
 	public Domain getMgmtDomain() {
 		return mgmtDomain;
 	}
@@ -674,8 +657,7 @@ public class Device {
 	 *
 	 * @return the name
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getName() {
 		return name;
 	}
@@ -686,8 +668,7 @@ public class Device {
 	 *
 	 * @return the network class
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public NetworkClass getNetworkClass() {
 		return networkClass;
 	}
@@ -708,8 +689,7 @@ public class Device {
 	 *
 	 * @return the owner groups
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(RestApiView.class)
 	@ManyToMany(fetch = FetchType.LAZY, mappedBy = "cachedDevices")
 	public Set<DeviceGroup> getOwnerGroups() {
 		return ownerGroups;
@@ -722,13 +702,12 @@ public class Device {
 	 * @return the device type
 	 */
 	@Transient
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getRealDeviceType() {
-		DeviceDriver driver;
+		DeviceDriver deviceDriver;
 		try {
-			driver = getDeviceDriver();
-			return driver.getDescription();
+			deviceDriver = getDeviceDriver();
+			return deviceDriver.getDescription();
 		}
 		catch (MissingDeviceDriverException e) {
 			return "Unknown driver";
@@ -741,8 +720,7 @@ public class Device {
 	 *
 	 * @return the serial number
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getSerialNumber() {
 		return serialNumber;
 	}
@@ -763,8 +741,7 @@ public class Device {
 	 *
 	 * @return the software level
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public SoftwareRule.ConformanceLevel getSoftwareLevel() {
 		return softwareLevel;
 	}
@@ -775,8 +752,7 @@ public class Device {
 	 *
 	 * @return the software version
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getSoftwareVersion() {
 		return softwareVersion;
 	}
@@ -788,8 +764,7 @@ public class Device {
 	 * @return the status
 	 */
 	@Enumerated(value = EnumType.ORDINAL)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Status getStatus() {
 		return status;
 	}
@@ -832,8 +807,7 @@ public class Device {
 	 *
 	 * @return true, if is auto try credentials
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isAutoTryCredentials() {
 		return autoTryCredentials;
 	}
@@ -843,8 +817,7 @@ public class Device {
 	 *
 	 * @return true, if is compliant
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public boolean isCompliant() {
 		for (CheckResult check : this.getComplianceCheckResults()) {
@@ -855,15 +828,13 @@ public class Device {
 		return true;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public boolean isEndOfLife() {
 		return (eolDate != null && eolDate.before(new Date()));
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@Transient
 	public boolean isEndOfSale() {
 		return (eosDate != null && eosDate.before(new Date()));
@@ -1195,8 +1166,7 @@ public class Device {
 		this.vrfInstances = vrfInstances;
 	}
 	
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public int getSshPort() {
 		return sshPort;
 	}
@@ -1205,8 +1175,7 @@ public class Device {
 		this.sshPort = sshPort;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public int getTelnetPort() {
 		return telnetPort;
 	}
@@ -1215,8 +1184,7 @@ public class Device {
 		this.telnetPort = telnetPort;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	@OneToOne(cascade = CascadeType.ALL)
 	public DeviceCredentialSet getSpecificCredentialSet() {
 		return specificCredentialSet;
@@ -1232,8 +1200,7 @@ public class Device {
 		@AttributeOverride(name = "prefixLength", column = @Column(name = "connect_ipv4_pfxlen")),
 		@AttributeOverride(name = "addressUsage", column = @Column(name = "connect_ipv4_usage")),
 	})
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Network4Address getConnectAddress() {
 		return connectAddress;
 	}

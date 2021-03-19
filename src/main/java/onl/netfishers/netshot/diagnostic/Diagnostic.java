@@ -67,9 +67,10 @@ public abstract class Diagnostic {
 	private static final Set<Class<? extends Diagnostic>> DIAGNOSTIC_CLASSES;
 
 	static {
-		DIAGNOSTIC_CLASSES = new HashSet<Class<? extends Diagnostic>>();
+		DIAGNOSTIC_CLASSES = new HashSet<>();
 		DIAGNOSTIC_CLASSES.add(SimpleDiagnostic.class);
 		DIAGNOSTIC_CLASSES.add(JavaScriptDiagnostic.class);
+		DIAGNOSTIC_CLASSES.add(PythonDiagnostic.class);
 	}
 
 	/**
@@ -97,7 +98,7 @@ public abstract class Diagnostic {
 	protected AttributeType resultType;
 
 	/** The associated results */
-	List<DiagnosticResult> results = new ArrayList<DiagnosticResult>();
+	List<DiagnosticResult> results = new ArrayList<>();
 	
 	/**
 	 * Instantiate a new diagnostic.
@@ -126,8 +127,7 @@ public abstract class Diagnostic {
 	 */
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public long getId() {
 		return id;
 	}
@@ -138,14 +138,12 @@ public abstract class Diagnostic {
 	 * @return the name
 	 */
 	@NaturalId(mutable = true)
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public String getName() {
 		return name;
 	}
 
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public AttributeType getResultType() {
 		return resultType;
 	}
@@ -156,8 +154,7 @@ public abstract class Diagnostic {
 	 * @return the target group
 	 */
 	@ManyToOne
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public DeviceGroup getTargetGroup() {
 		return targetGroup;
 	}
@@ -166,8 +163,7 @@ public abstract class Diagnostic {
 	 * Is the diagnostic enabled?
 	 * @return true if it's enabled
 	 */
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public boolean isEnabled() {
 		return enabled;
 	}
@@ -269,8 +265,7 @@ public abstract class Diagnostic {
 		if (obj == null) return false;
 		if (!(obj instanceof Diagnostic)) return false;
 		Diagnostic other = (Diagnostic) obj;
-		if (id != other.id) return false;
-		return true;
+		return id == other.id;
 	}
 
 	@Override

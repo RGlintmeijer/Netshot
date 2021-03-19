@@ -49,8 +49,7 @@ public class DiagnosticBinaryResult extends DiagnosticResult {
 		}
 	}
 	
-	@XmlElement
-	@JsonView(DefaultView.class)
+	@XmlElement @JsonView(DefaultView.class)
 	public Boolean getAssumption() {
 		return assumption;
 	}
@@ -62,7 +61,7 @@ public class DiagnosticBinaryResult extends DiagnosticResult {
 	@Override
 	@Transient
 	public String getAsText() {
-		if (Boolean.TRUE == assumption) {
+		if (Boolean.TRUE.equals(assumption)) {
 			return "true";
 		}
 		else {

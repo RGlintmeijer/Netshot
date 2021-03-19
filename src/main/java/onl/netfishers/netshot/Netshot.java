@@ -20,6 +20,7 @@ package onl.netfishers.netshot;
 
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.security.Provider;
 import java.security.Security;
 import java.util.Enumeration;
 import java.util.Properties;
@@ -54,7 +55,7 @@ import onl.netfishers.netshot.rest.RestService;
 public class Netshot extends Thread {
 
 	/** Netshot version. */
-	public static final String VERSION = "0.15.2";
+	public static final String VERSION = "0.16.1";
 
 	/** The list of configuration files to look at, in sequence. */
 	private static final String[] CONFIG_FILENAMES = new String[] {
@@ -64,7 +65,7 @@ public class Netshot extends Thread {
 	private static Properties config;
 
 	/** The logger. */
-	private static Logger logger = LoggerFactory.getLogger(Netshot.class);
+	final private static Logger logger = LoggerFactory.getLogger(Netshot.class);
 	final static public Logger aaaLogger = LoggerFactory.getLogger("AAA");
 
 	/**
@@ -202,7 +203,7 @@ public class Netshot extends Thread {
 		OutputStreamAppender<ILoggingEvent> appender;
 
 		if (logFile.equals("CONSOLE")) {
-			ConsoleAppender<ILoggingEvent> cAppender = new ConsoleAppender<ILoggingEvent>();
+			ConsoleAppender<ILoggingEvent> cAppender = new ConsoleAppender<>();
 			logger.info("Will go on logging to the console.");
 			appender = cAppender;
 		}
@@ -212,7 +213,7 @@ public class Netshot extends Thread {
 
 			loggerContext.reset();
 			try {
-				RollingFileAppender<ILoggingEvent> rfAppender = new RollingFileAppender<ILoggingEvent>();
+				RollingFileAppender<ILoggingEvent> rfAppender = new RollingFileAppender<>();
 				rfAppender.setContext(loggerContext);
 				rfAppender.setFile(logFile);
 
@@ -225,7 +226,7 @@ public class Netshot extends Thread {
 				fwRollingPolicy.start();
 
 				SizeBasedTriggeringPolicy<ILoggingEvent> triggeringPolicy = new 
-						SizeBasedTriggeringPolicy<ILoggingEvent>();
+						SizeBasedTriggeringPolicy<>();
 				triggeringPolicy.setMaxFileSize(new FileSize(logMaxSize * FileSize.MB_COEFFICIENT));
 				triggeringPolicy.start();
 
@@ -311,7 +312,7 @@ public class Netshot extends Thread {
 		if (auditFile != null) {
 			try {
 				LoggerContext loggerContext = ((ch.qos.logback.classic.Logger) aaaLogger).getLoggerContext();
-				RollingFileAppender<ILoggingEvent> appender = new RollingFileAppender<ILoggingEvent>();
+				RollingFileAppender<ILoggingEvent> appender = new RollingFileAppender<>();
 				appender.setContext(loggerContext);
 				appender.setFile(auditFile);
 
@@ -324,7 +325,7 @@ public class Netshot extends Thread {
 				fwRollingPolicy.start();
 
 				SizeBasedTriggeringPolicy<ILoggingEvent> triggeringPolicy = new 
-						SizeBasedTriggeringPolicy<ILoggingEvent>();
+						SizeBasedTriggeringPolicy<>();
 				triggeringPolicy.setMaxFileSize(new FileSize(auditMaxSize * FileSize.MB_COEFFICIENT));
 				triggeringPolicy.start();
 
@@ -351,6 +352,7 @@ public class Netshot extends Thread {
 	
 	/** The exception handler. To be used by other threads. */
 	public static Thread.UncaughtExceptionHandler exceptionHandler = new Thread.UncaughtExceptionHandler() {
+		@Override
 		public void uncaughtException(Thread th, Throwable ex) {
 			System.err.println("NETSHOT FATAL ERROR");
 			ex.printStackTrace();
@@ -409,6 +411,21 @@ public class Netshot extends Thread {
 	}
 
 	/**
+	 * Check the JVM name and print a warning message if it's not GraalVM.
+	 */
+	protected static void checkJvm() {
+		final String vendor = System.getProperty("java.vm.vendor"); // e.g. GraalVM Community
+		final String name = System.getProperty("java.vm.name"); // e.g. OpenJDK 64-Bit Server VM
+		final String version = System.getProperty("java.vm.version"); // e.g. 11.0.10+8-jvmci-21.0-b06
+		if (!vendor.matches("^GraalVM.*") || !name.matches("^OpenJDK.*")) {
+			logger.error("The current JVM  '{}, {} doesn't look like GraalVM, Netshot might not work properly.", name, vendor);
+		}
+		if (!version.matches("^11\\..*")) {
+			logger.error("The JVM version '{}' doesn't look like version 11, Netshot might not work properly.", version);
+		}
+	}
+
+	/**
 	 * The main method.
 	 *
 	 * @param args the arguments
@@ -426,8 +443,13 @@ public class Netshot extends Thread {
 		}
 
 		try {
+			logger.info("Checking current JVM.");
+			Netshot.checkJvm();
 			logger.info("Enabling BouncyCastle security.");
-			Security.insertProviderAt(new BouncyCastleProvider(), 1);
+			Security.addProvider(new BouncyCastleProvider());
+			for (Provider p : Security.getProviders()) {
+				logger.debug("Security provider {} is registered", p.getName());
+			}
 			logger.info("Initializing the task manager.");
 			TaskManager.init();
 			logger.info("Updating the database schema, if necessary.");

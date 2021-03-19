@@ -4,7 +4,8 @@ import java.util.Arrays;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.glassfish.jersey.jackson.JacksonFeature;
+import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
+
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.server.ServerProperties;
 import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
@@ -24,6 +25,7 @@ import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.security.SecurityScheme.In;
 import io.swagger.v3.oas.models.security.SecurityScheme.Type;
 import io.swagger.v3.oas.models.servers.Server;
+import onl.netfishers.netshot.rest.RestViews.RestApiView;
 
 /**
  * Netshot Web application definition.
@@ -38,7 +40,9 @@ class NetshotWebApplication extends ResourceConfig {
 		register(LoggerFilter.class);
 		register(ResponseCodeFilter.class);
 		// property(ServerProperties.TRACING, "ALL");
-		register(JacksonFeature.class);
+		JacksonJaxbJsonProvider jacksonProvider = new JacksonJaxbJsonProvider();
+		jacksonProvider.setDefaultView(RestApiView.class);
+		register(jacksonProvider);
 
 		// Swagger
 		registerClasses(OpenApiResource.class, AcceptHeaderOpenApiResource.class);
